@@ -68,19 +68,143 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The app stores its SQLite database and uploaded PDFs inside `./data`, which is mounted to `/app/data` in the container.
+For pull-based deploys from GitHub Container Registry, the image path for this repo is:
+
+```text
+ghcr.io/outlain/goodnotes-clone:latest
+```
+
+The app stores its SQLite database and uploaded PDFs inside `/app/data` in the container. In the default Compose file, that container path is backed by the host folder `./data`.
+
+### What the volume does
+
+This line:
+
+```yaml
+volumes:
+  - ./data:/app/data
+```
+
+means:
+
+- `./data` is a folder on your host machine, next to `docker-compose.yml`
+- `/app/data` is the folder the app uses inside the container
+- anything the app writes to `/app/data` survives container rebuilds and restarts
+
+You only need one persistent volume for this app right now: `/app/data`.
+
+That single mounted folder holds:
+
+- `inkflow.db` - the SQLite database
+- `uploads/` - original uploaded PDF files
+- `temp/` - temporary upload staging files
+
+### Does the app create the data files itself?
+
+Yes. If `./data` is empty, the app creates what it needs on startup:
+
+- the `./data` folder if Docker creates it as an empty bind mount
+- the SQLite database file
+- the `uploads/` directory
+- the `temp/` directory
+
+You do not need to pre-create any files inside `./data`.
+
+### Does `.env` go inside `./data`?
+
+No. `.env` should stay next to `docker-compose.yml`, not inside `./data`.
+
+With this Compose section:
+
+```yaml
+env_file:
+  - .env
+```
+
+Docker reads environment variables from a host file called `.env` in the project directory and passes them into the container.
+
+So the two host-side paths have different jobs:
+
+- `.env` - configuration values for the container
+- `./data` - persistent app data created and used by the app
+
+The app will not create `.env` for you. Create it once by copying `.env.example`.
+
+### Typical first-time setup
+
+1. Create the env file:
+
+```bash
+cp .env.example .env
+```
+
+2. Edit `.env` and set at least:
+
+- `SESSION_SECRET` to a long random string
+- `APP_PASSWORD` if you want a login gate
+
+3. Start the container:
+
+```bash
+docker compose up -d
+```
+
+4. On first boot, the app populates the mounted `./data` folder automatically.
+
+### Example production layout
+
+```text
+goodnotes-clone/
+  docker-compose.yml
+  .env
+  data/
+```
+
+After first startup, `data/` will look roughly like:
+
+```text
+data/
+  inkflow.db
+  uploads/
+  temp/
+```
+
+### If you want a different host path
+
+You can mount any folder you want, as long as it maps to `/app/data` inside the container.
+
+Example:
+
+```yaml
+volumes:
+  - /srv/inkflow/data:/app/data
+```
+
+or with a named volume:
+
+```yaml
+volumes:
+  - inkflow_data:/app/data
+```
+
+If you use a named volume, declare it at the bottom of the Compose file:
+
+```yaml
+volumes:
+  inkflow_data:
+```
 
 ## Environment variables
 
 - `PORT`: HTTP port for the server
-- `DATA_DIR`: data directory for SQLite and uploads
+- `DATA_DIR`: data directory for SQLite and uploads. In Docker, keep this as `/app/data`.
 - `SESSION_SECRET`: cookie signing secret
 - `APP_PASSWORD`: optional shared password for the deployment. Leave blank to disable the login screen.
 
 ## Deployment notes
 
 - The included GitHub Action builds and publishes a Docker image to GHCR.
-- Replace `ghcr.io/your-org/inkflow-clone:latest` in `docker-compose.yml` with your own published image path.
+- This repo's GHCR image path is `ghcr.io/outlain/goodnotes-clone:latest`.
 - If you deploy publicly, set a strong `SESSION_SECRET` and `APP_PASSWORD`.
 - Back up the mounted `data` volume regularly because it contains both the notes database and uploaded source PDFs.
 

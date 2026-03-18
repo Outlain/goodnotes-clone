@@ -1,14 +1,19 @@
 services:
   inkflow:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ghcr.io/your-org/inkflow-clone:latest
+    # Pull the prebuilt container from GHCR for production/self-hosted deploys.
+    image: ghcr.io/outlain/goodnotes-clone:latest
+    # If you want Compose to build from the local checkout instead, uncomment this:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     ports:
       - "3000:3000"
     env_file:
+      # This file stays next to docker-compose.yml on the host.
+      # It is not stored inside /app/data.
       - .env
     volumes:
+      # This is the only persistent mount the app needs.
+      # The app will create the SQLite database and upload folders inside it on first start.
       - ./data:/app/data
     restart: unless-stopped
-
