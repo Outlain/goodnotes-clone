@@ -1,0 +1,337 @@
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
+import type { Annotation, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
+import { PdfPageLayer } from "./PdfPageLayer";
+
+interface EditorCanvasProps {
+  page: PageRecord;
+  fileUrl?: string;
+  zoom: number;
+  tool: EditorTool;
+  color: string;
+  strokeWidth: number;
+  palmSettings: PalmSettings;
+  onChange: (annotations: Annotation[]) => void;
+}
+
+interface PointLike {
+  x: number;
+  y: number;
+  pressure: number;
+}
+
+function shouldIgnorePointer(event: ReactPointerEvent<SVGSVGElement>, palmSettings: PalmSettings): boolean {
+  if (event.pointerType === "mouse") {
+    return false;
+  }
+
+  if (palmSettings.stylusOnly) {
+    return event.pointerType !== "pen";
+  }
+
+  if (event.pointerType === "touch") {
+    return event.width * event.height > palmSettings.maxTouchArea;
+  }
+
+  return false;
+}
+
+function createId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function averagePressure(points: PointLike[]): number {
+  if (points.length === 0) {
+    return 0.5;
+  }
+
+  return points.reduce((total, point) => total + (point.pressure || 0.5), 0) / points.length;
+}
+
+function PagePaper({ template }: { template: PageRecord["template"] }) {
+  return <div className={`page-paper template-${template ?? "blank"}`} />;
+}
+
+export function EditorCanvas({
+  page,
+  fileUrl,
+  zoom,
+  tool,
+  color,
+  strokeWidth,
+  palmSettings,
+  onChange
+}: EditorCanvasProps) {
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const drawingRef = useRef(false);
+  const erasingRef = useRef(false);
+  const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftStroke(null);
+    setEditingTextId(null);
+  }, [page.id]);
+
+  function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return { x: 0, y: 0, pressure: event.pressure || 0.5 };
+    }
+
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * page.width,
+      y: ((event.clientY - rect.top) / rect.height) * page.height,
+      pressure: event.pressure || 0.5
+    };
+  }
+
+  function eraseAt(point: PointLike): void {
+    for (let index = page.annotations.length - 1; index >= 0; index -= 1) {
+      if (hitTestAnnotation(page.annotations[index], point.x, point.y)) {
+        const nextAnnotations = [...page.annotations];
+        nextAnnotations.splice(index, 1);
+        onChange(nextAnnotations);
+        break;
+      }
+    }
+  }
+
+  function createTextAnnotation(x: number, y: number): void {
+    const safeX = Math.max(16, Math.min(x, page.width - 140));
+    const safeY = Math.max(16, Math.min(y, page.height - 120));
+    const next: TextAnnotation = {
+      id: createId(),
+      type: "text",
+      x: safeX,
+      y: safeY,
+      width: Math.max(120, Math.min(220, page.width - safeX - 24)),
+      height: 96,
+      text: "",
+      color,
+      fontSize: 18
+    };
+    onChange([...page.annotations, next]);
+    setEditingTextId(next.id);
+  }
+
+  function commitDraftStroke(): void {
+    if (!draftStroke) {
+      return;
+    }
+
+    if (draftStroke.points.length === 0) {
+      setDraftStroke(null);
+      return;
+    }
+
+    const weightedWidth =
+      (tool === "highlighter" ? strokeWidth * 2.2 : strokeWidth) * (0.72 + averagePressure(draftStroke.points) * 0.5);
+    onChange([
+      ...page.annotations,
+      {
+        ...draftStroke,
+        width: Number(weightedWidth.toFixed(2))
+      }
+    ]);
+    setDraftStroke(null);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (shouldIgnorePointer(event, palmSettings)) {
+      return;
+    }
+
+    const point = getPoint(event);
+
+    if (tool === "text") {
+      createTextAnnotation(point.x, point.y);
+      return;
+    }
+
+    if (tool === "eraser") {
+      erasingRef.current = true;
+      svgRef.current?.setPointerCapture(event.pointerId);
+      eraseAt(point);
+      return;
+    }
+
+    if (tool === "hand") {
+      return;
+    }
+
+    drawingRef.current = true;
+    svgRef.current?.setPointerCapture(event.pointerId);
+    setDraftStroke({
+      id: createId(),
+      type: "stroke",
+      tool: tool === "highlighter" ? "highlighter" : "pen",
+      color,
+      width: strokeWidth,
+      points: [point]
+    });
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (drawingRef.current && draftStroke) {
+      const point = getPoint(event);
+      setDraftStroke({
+        ...draftStroke,
+        points: [...draftStroke.points, point]
+      });
+      return;
+    }
+
+    if (erasingRef.current) {
+      eraseAt(getPoint(event));
+    }
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (drawingRef.current) {
+      drawingRef.current = false;
+      if (svgRef.current?.hasPointerCapture(event.pointerId)) {
+        svgRef.current.releasePointerCapture(event.pointerId);
+      }
+      commitDraftStroke();
+    }
+
+    if (erasingRef.current) {
+      erasingRef.current = false;
+      if (svgRef.current?.hasPointerCapture(event.pointerId)) {
+        svgRef.current.releasePointerCapture(event.pointerId);
+      }
+    }
+  }
+
+  function updateTextAnnotation(annotationId: string, nextText: string): void {
+    onChange(
+      page.annotations.map((annotation) =>
+        annotation.type === "text" && annotation.id === annotationId
+          ? {
+              ...annotation,
+              text: nextText
+            }
+          : annotation
+      )
+    );
+  }
+
+  function finishTextEditing(annotationId: string): void {
+    const annotation = page.annotations.find((entry) => entry.type === "text" && entry.id === annotationId);
+    if (annotation?.type === "text" && !annotation.text.trim()) {
+      onChange(page.annotations.filter((entry) => entry.id !== annotationId));
+    }
+    setEditingTextId(null);
+  }
+
+  return (
+    <div className="page-stage-shell">
+      <div
+        className="page-stage"
+        ref={stageRef}
+        style={{
+          width: `${page.width * zoom}px`,
+          height: `${page.height * zoom}px`
+        }}
+      >
+        {page.kind === "pdf" && fileUrl ? (
+          <PdfPageLayer
+            pageIndex={page.sourcePageIndex ?? 0}
+            url={fileUrl}
+            width={page.width}
+            height={page.height}
+            zoom={zoom}
+          />
+        ) : (
+          <PagePaper template={page.template} />
+        )}
+
+        <svg
+          className={`annotation-layer ${tool === "hand" ? "annotation-hand" : ""}`}
+          ref={svgRef}
+          viewBox={`0 0 ${page.width} ${page.height}`}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerUp}
+        >
+          {page.annotations.map((annotation) =>
+            annotation.type === "stroke" ? (
+              <path
+                key={annotation.id}
+                d={buildStrokePath(annotation)}
+                fill="none"
+                stroke={annotation.color}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeOpacity={annotation.tool === "highlighter" ? 0.22 : 1}
+                strokeWidth={annotation.width}
+              />
+            ) : null
+          )}
+
+          {draftStroke ? (
+            <path
+              d={buildStrokePath(draftStroke)}
+              fill="none"
+              stroke={draftStroke.color}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeOpacity={draftStroke.tool === "highlighter" ? 0.22 : 1}
+              strokeWidth={draftStroke.width}
+            />
+          ) : null}
+        </svg>
+
+        {page.annotations.map((annotation) => {
+          if (annotation.type !== "text") {
+            return null;
+          }
+
+          const sharedStyle = {
+            left: `${annotation.x * zoom}px`,
+            top: `${annotation.y * zoom}px`,
+            width: `${annotation.width * zoom}px`,
+            minHeight: `${annotation.height * zoom}px`,
+            color: annotation.color,
+            fontSize: `${annotation.fontSize * zoom}px`
+          };
+
+          if (editingTextId === annotation.id) {
+            return (
+              <textarea
+                autoFocus
+                className="text-annotation-editor"
+                key={annotation.id}
+                style={sharedStyle}
+                value={annotation.text}
+                onBlur={() => finishTextEditing(annotation.id)}
+                onChange={(event) => updateTextAnnotation(annotation.id, event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    finishTextEditing(annotation.id);
+                  }
+                }}
+              />
+            );
+          }
+
+          return (
+            <button
+              className="text-annotation"
+              key={annotation.id}
+              style={sharedStyle}
+              onClick={() => setEditingTextId(annotation.id)}
+              type="button"
+            >
+              {annotation.text || "Text"}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

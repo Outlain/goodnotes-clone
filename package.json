@@ -1,0 +1,11 @@
+{
+  "name": "inkflow-clone",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "npm --prefix client run build && npm --prefix server run build",
+    "dev:client": "npm --prefix client run dev",
+    "dev:server": "npm --prefix server run dev"
+  }
+}
+

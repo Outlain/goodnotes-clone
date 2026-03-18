@@ -1,0 +1,36 @@
+{
+  "name": "inkflow-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.7.0",
+    "compression": "1.8.1",
+    "cookie-parser": "1.4.7",
+    "express": "5.2.1",
+    "helmet": "8.0.0",
+    "multer": "2.1.1",
+    "nanoid": "5.1.4",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "4.10.38",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.12",
+    "@types/compression": "1.7.5",
+    "@types/cookie-parser": "1.4.7",
+    "@types/express": "5.0.6",
+    "@types/multer": "1.4.12",
+    "@types/node": "22.10.2",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2"
+  }
+}
