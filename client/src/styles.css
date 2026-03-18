@@ -186,8 +186,29 @@ a {
 }
 
 .thumbnail-rail,
-.inspector-card {
+.inspector-panel {
   overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.thumbnail-rail,
+.page-panel,
+.inspector-panel,
+.compact-sheet-card {
+  scrollbar-width: thin;
+}
+
+.inspector-panel {
+  padding-right: 0.3rem;
+}
+
+.inspector-card {
+  padding: 1rem;
+  display: grid;
+  gap: 0.75rem;
+  overflow: visible;
+  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .page-panel {
@@ -516,6 +537,11 @@ a {
   color: var(--ink);
 }
 
+.app-input {
+  width: 100%;
+  min-width: 0;
+}
+
 .title-input {
   min-width: clamp(180px, 32vw, 460px);
   font: 600 1.15rem/1 "Newsreader", serif;
@@ -586,11 +612,13 @@ a {
   color: var(--muted);
   margin: 0;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .error-text {
   color: #a73a2f;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .folder-chip {
@@ -896,6 +924,20 @@ a {
   text-align: left;
   display: grid;
   gap: 0.25rem;
+  min-width: 0;
+}
+
+.search-result strong,
+.search-result span,
+.toggle-row span,
+.stack-form span,
+.inspector-card p,
+.inspector-card button,
+.inspector-card label,
+.compact-sheet-card p,
+.compact-sheet-card button,
+.compact-sheet-card label {
+  overflow-wrap: anywhere;
 }
 
 .empty-state {
