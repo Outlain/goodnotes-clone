@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TouchEvent, WheelEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
@@ -359,17 +359,13 @@ export function EditorPage() {
   const searchResults = searchQuery.trim()
     ? bundle.pages.filter((page) => getPageSearchText(page).toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : [];
-  const previewWindow = useMemo(() => {
-    if (!activePage) {
-      return new Set<string>();
-    }
-
-    return new Set(
-      bundle.pages
-        .filter((page) => Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS)
-        .map((page) => page.id)
-    );
-  }, [activePage, bundle.pages]);
+  const previewWindow = new Set(
+    activePage
+      ? bundle.pages
+          .filter((page) => Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS)
+          .map((page) => page.id)
+      : []
+  );
 
   function handlePagePanelWheel(event: WheelEvent<HTMLElement>): void {
     if (tool !== "hand" || zoom > 1.05) {
@@ -512,41 +508,39 @@ export function EditorPage() {
 
       <section className="editor-body">
         <aside className="thumbnail-rail">
-          {bundle.pages.map((page) => (
-            (() => {
-              const thumbnailFileUrl = page.sourceFileId
-                ? bundle.files.find((file) => file.id === page.sourceFileId)?.url
-                : undefined;
+          {bundle.pages.map((page) => {
+            const thumbnailFileUrl = page.sourceFileId
+              ? bundle.files.find((file) => file.id === page.sourceFileId)?.url
+              : undefined;
 
-              return (
-                <button
-                  className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
-                  data-page-id={page.id}
-                  key={page.id}
-                  onClick={() => setActivePageId(page.id)}
-                  type="button"
-                >
-                  <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
-                    {page.kind === "pdf" && thumbnailFileUrl ? (
-                      previewWindow.has(page.id) ? (
-                        <PdfThumbnail
-                          height={page.height}
-                          pageIndex={page.sourcePageIndex ?? 0}
-                          url={thumbnailFileUrl}
-                          width={page.width}
-                        />
-                      ) : (
-                        <span>Page {page.position}</span>
-                      )
+            return (
+              <button
+                className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
+                data-page-id={page.id}
+                key={page.id}
+                onClick={() => setActivePageId(page.id)}
+                type="button"
+              >
+                <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
+                  {page.kind === "pdf" && thumbnailFileUrl ? (
+                    previewWindow.has(page.id) ? (
+                      <PdfThumbnail
+                        height={page.height}
+                        pageIndex={page.sourcePageIndex ?? 0}
+                        url={thumbnailFileUrl}
+                        width={page.width}
+                      />
                     ) : (
-                      <span>{page.kind === "pdf" ? "PDF" : page.template ?? "blank"}</span>
-                    )}
-                  </div>
-                  <span>Page {page.position}</span>
-                </button>
-              );
-            })()
-          ))}
+                      <span>Page {page.position}</span>
+                    )
+                  ) : (
+                    <span>{page.kind === "pdf" ? "PDF" : page.template ?? "blank"}</span>
+                  )}
+                </div>
+                <span>Page {page.position}</span>
+              </button>
+            );
+          })}
         </aside>
 
         <section className="page-panel" onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart} onWheel={handlePagePanelWheel}>
