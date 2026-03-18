@@ -1,18 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { loadPdf } from "../lib/pdf";
 
-interface PdfPageLayerProps {
+interface PdfThumbnailProps {
   pageIndex: number;
   url: string;
   width: number;
   height: number;
-  zoom: number;
 }
 
-export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
+export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string>("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -29,19 +27,16 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
       }
 
       try {
-        if (!cancelled) {
-          setIsLoading(true);
-        }
-
         const pdf = await loadPdf(url);
         const page = await pdf.getPage(pageIndex + 1);
         const deviceScale = window.devicePixelRatio || 1;
-        const viewport = page.getViewport({ scale: zoom * deviceScale });
+        const scale = Math.min((100 / width) * deviceScale, (140 / height) * deviceScale);
+        const viewport = page.getViewport({ scale });
 
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        canvas.style.width = `${width * zoom}px`;
-        canvas.style.height = `${height * zoom}px`;
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
         context.clearRect(0, 0, canvas.width, canvas.height);
 
         await page.render({
@@ -51,18 +46,16 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
 
         if (!cancelled) {
           setError("");
-          setIsLoading(false);
         }
       } catch (nextError) {
-        console.error("[Inkflow] PDF page render failed.", {
+        console.error("[Inkflow] Thumbnail render failed.", {
           url,
           pageIndex,
           error: nextError
         });
 
         if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : "Could not render PDF page.");
-          setIsLoading(false);
+          setError(nextError instanceof Error ? nextError.message : "Could not render thumbnail.");
         }
       }
     }
@@ -72,13 +65,12 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
     return () => {
       cancelled = true;
     };
-  }, [height, pageIndex, url, width, zoom]);
+  }, [height, pageIndex, url, width]);
 
   return (
     <>
-      <canvas className="pdf-canvas" ref={canvasRef} />
-      {isLoading && !error ? <div className="page-fallback">Loading PDF page...</div> : null}
-      {error ? <div className="page-fallback">PDF preview failed: {error}</div> : null}
+      <canvas className="thumbnail-canvas" ref={canvasRef} />
+      {error ? <div className="thumbnail-overlay">Preview unavailable</div> : null}
     </>
   );
 }

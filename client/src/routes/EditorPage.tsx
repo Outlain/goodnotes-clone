@@ -1,20 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { TouchEvent, WheelEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
 import { EditorCanvas } from "../components/EditorCanvas";
+import { PdfThumbnail } from "../components/PdfThumbnail";
 import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
+const HISTORY_LIMIT = 60;
+const THUMBNAIL_PREVIEW_RADIUS = 8;
+const NAVIGATION_SWIPE_THRESHOLD = 56;
 
 function clampZoom(value: number): number {
   return Math.min(2.6, Math.max(0.45, Number(value.toFixed(2))));
+}
+
+function cloneAnnotations(annotations: Annotation[]): Annotation[] {
+  return JSON.parse(JSON.stringify(annotations)) as Annotation[];
 }
 
 export function EditorPage() {
   const { documentId = "" } = useParams();
   const navigate = useNavigate();
   const dirtyPagesRef = useRef(new Set<string>());
+  const historyRef = useRef(new Map<string, { past: Annotation[][]; future: Annotation[][] }>());
+  const wheelNavigationRef = useRef({ lastAt: 0 });
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -51,6 +63,10 @@ export function EditorPage() {
 
   useEffect(() => {
     loadDocument();
+  }, [documentId]);
+
+  useEffect(() => {
+    historyRef.current.clear();
   }, [documentId]);
 
   useEffect(() => {
@@ -102,25 +118,127 @@ export function EditorPage() {
     }
   }
 
+  function setPageAnnotations(pageId: string, nextAnnotations: Annotation[], options?: { recordHistory?: boolean }) {
+    if (!pageId) {
+      return;
+    }
+
+    const recordHistory = options?.recordHistory ?? true;
+
+    setBundle((currentBundle) => {
+      if (!currentBundle) {
+        return currentBundle;
+      }
+
+      const currentPage = currentBundle.pages.find((page) => page.id === pageId);
+      if (!currentPage) {
+        return currentBundle;
+      }
+
+      const currentSerialized = JSON.stringify(currentPage.annotations);
+      const nextSerialized = JSON.stringify(nextAnnotations);
+      if (currentSerialized === nextSerialized) {
+        return currentBundle;
+      }
+
+      if (recordHistory) {
+        const historyEntry = historyRef.current.get(pageId) ?? { past: [], future: [] };
+        historyEntry.past.push(cloneAnnotations(currentPage.annotations));
+        if (historyEntry.past.length > HISTORY_LIMIT) {
+          historyEntry.past.shift();
+        }
+        historyEntry.future = [];
+        historyRef.current.set(pageId, historyEntry);
+      }
+
+      return {
+        ...currentBundle,
+        pages: currentBundle.pages.map((page) =>
+          page.id === pageId
+            ? {
+                ...page,
+                annotations: nextAnnotations,
+                annotationText: collectAnnotationText(nextAnnotations)
+              }
+            : page
+        )
+      };
+    });
+
+    dirtyPagesRef.current.add(pageId);
+    setSaveState("Saving...");
+  }
+
   function updateAnnotations(nextAnnotations: Annotation[]) {
+    if (!activePageId) {
+      return;
+    }
+
+    setPageAnnotations(activePageId, nextAnnotations);
+  }
+
+  function goToRelativePage(direction: number): void {
     if (!bundle || !activePageId) {
       return;
     }
 
-    setBundle({
-      ...bundle,
-      pages: bundle.pages.map((page) =>
-        page.id === activePageId
-          ? {
-              ...page,
-              annotations: nextAnnotations,
-              annotationText: collectAnnotationText(nextAnnotations)
-            }
-          : page
-      )
-    });
-    dirtyPagesRef.current.add(activePageId);
-    setSaveState("Saving...");
+    const currentIndex = bundle.pages.findIndex((page) => page.id === activePageId);
+    if (currentIndex < 0) {
+      return;
+    }
+
+    const nextPage = bundle.pages[currentIndex + direction];
+    if (nextPage) {
+      setActivePageId(nextPage.id);
+    }
+  }
+
+  function undoPageChange(): void {
+    if (!bundle || !activePageId) {
+      return;
+    }
+
+    const currentPage = bundle.pages.find((page) => page.id === activePageId);
+    if (!currentPage) {
+      return;
+    }
+
+    const historyEntry = historyRef.current.get(activePageId);
+    const previous = historyEntry?.past.pop();
+    if (!previous) {
+      return;
+    }
+
+    historyEntry?.future.push(cloneAnnotations(currentPage.annotations));
+    if (historyEntry) {
+      historyRef.current.set(activePageId, historyEntry);
+    }
+
+    setPageAnnotations(activePageId, previous, { recordHistory: false });
+  }
+
+  function redoPageChange(): void {
+    if (!bundle || !activePageId) {
+      return;
+    }
+
+    const currentPage = bundle.pages.find((page) => page.id === activePageId);
+    if (!currentPage) {
+      return;
+    }
+
+    const historyEntry = historyRef.current.get(activePageId);
+    const next = historyEntry?.future.pop();
+    if (!next) {
+      return;
+    }
+
+    historyEntry?.past.push(cloneAnnotations(currentPage.annotations));
+    if (historyEntry) {
+      historyRef.current.set(activePageId, historyEntry);
+    }
+
+    setPageAnnotations(activePageId, next, { recordHistory: false });
   }
 
   async function insertBlankPage(placement: "before" | "after") {
@@ -160,6 +278,64 @@ export function EditorPage() {
     }
   }
 
+  useEffect(() => {
+    if (!activePageId) {
+      return;
+    }
+
+    const selectedThumbnail = document.querySelector<HTMLElement>(`[data-page-id="${activePageId}"]`);
+    selectedThumbnail?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest"
+    });
+  }, [activePageId]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent): void {
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable === true;
+
+      if (isTypingTarget) {
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redoPageChange();
+        } else {
+          undoPageChange();
+        }
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redoPageChange();
+        return;
+      }
+
+      if (["ArrowRight", "ArrowDown", "PageDown"].includes(event.key)) {
+        event.preventDefault();
+        goToRelativePage(1);
+        return;
+      }
+
+      if (["ArrowLeft", "ArrowUp", "PageUp"].includes(event.key)) {
+        event.preventDefault();
+        goToRelativePage(-1);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activePageId, bundle]);
+
   if (loading) {
     return <main className="loading-screen">Opening document...</main>;
   }
@@ -177,9 +353,74 @@ export function EditorPage() {
 
   const activePage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
   const activeFile = bundle.files.find((file) => file.id === activePage?.sourceFileId);
+  const historyEntry = activePageId ? historyRef.current.get(activePageId) : undefined;
+  const canUndo = Boolean(historyEntry?.past.length);
+  const canRedo = Boolean(historyEntry?.future.length);
   const searchResults = searchQuery.trim()
     ? bundle.pages.filter((page) => getPageSearchText(page).toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : [];
+  const previewWindow = useMemo(() => {
+    if (!activePage) {
+      return new Set<string>();
+    }
+
+    return new Set(
+      bundle.pages
+        .filter((page) => Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS)
+        .map((page) => page.id)
+    );
+  }, [activePage, bundle.pages]);
+
+  function handlePagePanelWheel(event: WheelEvent<HTMLElement>): void {
+    if (tool !== "hand" || zoom > 1.05) {
+      return;
+    }
+
+    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (Math.abs(delta) < 32) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - wheelNavigationRef.current.lastAt < 220) {
+      return;
+    }
+
+    event.preventDefault();
+    wheelNavigationRef.current.lastAt = now;
+    goToRelativePage(delta > 0 ? 1 : -1);
+  }
+
+  function handleTouchStart(event: TouchEvent<HTMLElement>): void {
+    if (tool !== "hand" || zoom > 1.05) {
+      return;
+    }
+
+    const touch = event.changedTouches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  }
+
+  function handleTouchEnd(event: TouchEvent<HTMLElement>): void {
+    if (tool !== "hand" || zoom > 1.05 || !touchStartRef.current) {
+      return;
+    }
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    const deltaY = touch.clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+
+    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < NAVIGATION_SWIPE_THRESHOLD) {
+      return;
+    }
+
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      goToRelativePage(deltaX < 0 ? 1 : -1);
+      return;
+    }
+
+    goToRelativePage(deltaY < 0 ? 1 : -1);
+  }
 
   return (
     <main className="editor-layout">
@@ -202,6 +443,12 @@ export function EditorPage() {
         </div>
 
         <div className="header-group">
+          <button className="ghost-button" disabled={!canUndo} onClick={undoPageChange} type="button">
+            Undo
+          </button>
+          <button className="ghost-button" disabled={!canRedo} onClick={redoPageChange} type="button">
+            Redo
+          </button>
           <button className="ghost-button" onClick={() => setZoom((current) => clampZoom(current - 0.1))} type="button">
             -
           </button>
@@ -266,21 +513,43 @@ export function EditorPage() {
       <section className="editor-body">
         <aside className="thumbnail-rail">
           {bundle.pages.map((page) => (
-            <button
-              className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
-              key={page.id}
-              onClick={() => setActivePageId(page.id)}
-              type="button"
-            >
-              <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
-                <span>{page.kind === "pdf" ? "PDF" : page.template ?? "blank"}</span>
-              </div>
-              <span>Page {page.position}</span>
-            </button>
+            (() => {
+              const thumbnailFileUrl = page.sourceFileId
+                ? bundle.files.find((file) => file.id === page.sourceFileId)?.url
+                : undefined;
+
+              return (
+                <button
+                  className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
+                  data-page-id={page.id}
+                  key={page.id}
+                  onClick={() => setActivePageId(page.id)}
+                  type="button"
+                >
+                  <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
+                    {page.kind === "pdf" && thumbnailFileUrl ? (
+                      previewWindow.has(page.id) ? (
+                        <PdfThumbnail
+                          height={page.height}
+                          pageIndex={page.sourcePageIndex ?? 0}
+                          url={thumbnailFileUrl}
+                          width={page.width}
+                        />
+                      ) : (
+                        <span>Page {page.position}</span>
+                      )
+                    ) : (
+                      <span>{page.kind === "pdf" ? "PDF" : page.template ?? "blank"}</span>
+                    )}
+                  </div>
+                  <span>Page {page.position}</span>
+                </button>
+              );
+            })()
           ))}
         </aside>
 
-        <section className="page-panel">
+        <section className="page-panel" onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart} onWheel={handlePagePanelWheel}>
           {activePage ? (
             <EditorCanvas
               color={inkColor}
@@ -350,6 +619,7 @@ export function EditorPage() {
             <p className="muted-copy">
               On iPad browsers this works best with Apple Pencil because the editor can ignore touch input and accept pen input only.
             </p>
+            <p className="muted-copy">Switch to Hand mode to swipe between pages. Arrow keys and Page Up/Page Down also navigate.</p>
           </section>
 
           <section className="inspector-card">
@@ -382,6 +652,8 @@ export function EditorPage() {
               {bundle.document.kind === "pdf" ? "Imported PDF with editable annotation layers." : "Blank notebook with reusable paper templates."}
             </p>
             <p className="muted-copy">{bundle.document.pageCount} pages</p>
+            {activeFile ? <p className="muted-copy">{Math.max(1, Math.round(activeFile.size / (1024 * 1024)))} MB source PDF</p> : null}
+            <p className="muted-copy">Eraser removes whole strokes or text boxes right now. Undo and Redo are available in the top bar.</p>
             {error ? <p className="error-text">{error}</p> : null}
           </section>
         </aside>

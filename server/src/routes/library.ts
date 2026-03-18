@@ -212,6 +212,9 @@ libraryRouter.get(
     }
 
     response.type(file.mimeType);
+    response.setHeader("Content-Disposition", "inline");
+    response.setHeader("Cache-Control", "private, max-age=3600");
+    response.setHeader("Accept-Ranges", "bytes");
     response.sendFile(getUploadPath(file.storageKey));
   })
 );

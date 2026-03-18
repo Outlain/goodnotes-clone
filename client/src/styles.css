@@ -373,11 +373,32 @@ a {
   aspect-ratio: 0.74;
   border-radius: 14px;
   border: 1px solid rgba(24, 49, 79, 0.12);
+  position: relative;
+  overflow: hidden;
   display: grid;
   place-items: center;
   font-size: 0.82rem;
   color: var(--muted);
   background: #fffdf7;
+}
+
+.thumbnail-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.thumbnail-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 0.45rem;
+  background: rgba(255, 253, 247, 0.7);
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 .preview-pdf {
@@ -436,6 +457,12 @@ a {
 
 .ghost-button {
   background: rgba(255, 255, 255, 0.32);
+}
+
+.ghost-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+  transform: none;
 }
 
 .danger-button {

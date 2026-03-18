@@ -6,9 +6,19 @@ const pdfCache = new Map<string, Promise<PDFDocumentProxy>>();
 
 export function loadPdf(url: string): Promise<PDFDocumentProxy> {
   if (!pdfCache.has(url)) {
-    pdfCache.set(
-      url,
-      (async () => {
+    const promise = (async () => {
+      try {
+        return await getDocument({
+          url,
+          withCredentials: true,
+          disableRange: false,
+          disableStream: false,
+          disableAutoFetch: false,
+          rangeChunkSize: 256 * 1024
+        }).promise;
+      } catch (streamingError) {
+        console.warn("[Inkflow] Streaming PDF load failed, falling back to byte fetch.", { url, streamingError });
+
         const response = await fetch(url, {
           credentials: "include"
         });
@@ -19,8 +29,14 @@ export function loadPdf(url: string): Promise<PDFDocumentProxy> {
 
         const bytes = new Uint8Array(await response.arrayBuffer());
         return getDocument({ data: bytes }).promise;
-      })()
-    );
+      }
+    })();
+
+    promise.catch(() => {
+      pdfCache.delete(url);
+    });
+
+    pdfCache.set(url, promise);
   }
 
   return pdfCache.get(url) as Promise<PDFDocumentProxy>;
