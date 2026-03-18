@@ -8,8 +8,8 @@ import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
-const THUMBNAIL_PREVIEW_RADIUS = 4;
-const RENDER_AHEAD_RADIUS = 4;
+const THUMBNAIL_PREVIEW_RADIUS = 3;
+const RENDER_AHEAD_RADIUS = 2;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
@@ -150,6 +150,8 @@ export function EditorPage() {
   const historyRef = useRef(new Map<string, { past: Annotation[][]; future: Annotation[][] }>());
   const pagePanelRef = useRef<HTMLElement | null>(null);
   const pageElementRefs = useRef(new Map<string, HTMLDivElement>());
+  const thumbnailElementRefs = useRef(new Map<string, HTMLButtonElement>());
+  const compactThumbnailRailRef = useRef<HTMLDivElement | null>(null);
   const visibleRatiosRef = useRef(new Map<string, number>());
   const activePageIdRef = useRef("");
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
@@ -165,6 +167,7 @@ export function EditorPage() {
   const [saveState, setSaveState] = useState("All changes saved");
   const [titleDraft, setTitleDraft] = useState("");
   const [visiblePageIds, setVisiblePageIds] = useState<string[]>([]);
+  const [visibleCompactThumbnailIds, setVisibleCompactThumbnailIds] = useState<string[]>([]);
   const [isCompactLayout, setIsCompactLayout] = useState(
     () => typeof window !== "undefined" && window.matchMedia(COMPACT_LAYOUT_QUERY).matches
   );
@@ -229,6 +232,7 @@ export function EditorPage() {
     historyRef.current.clear();
     visibleRatiosRef.current.clear();
     setVisiblePageIds([]);
+    setVisibleCompactThumbnailIds([]);
   }, [documentId]);
 
   useEffect(() => {
@@ -349,6 +353,15 @@ export function EditorPage() {
     }
 
     pageElementRefs.current.delete(pageId);
+  }
+
+  function setThumbnailNode(pageId: string, node: HTMLButtonElement | null): void {
+    if (node) {
+      thumbnailElementRefs.current.set(pageId, node);
+      return;
+    }
+
+    thumbnailElementRefs.current.delete(pageId);
   }
 
   function focusPage(pageId: string, behavior: ScrollBehavior = "smooth"): void {
@@ -479,6 +492,65 @@ export function EditorPage() {
   }, [activePageId, compactPagesOpen, isCompactLayout]);
 
   useEffect(() => {
+    if (!bundle || !isCompactLayout || !compactPagesOpen || !compactThumbnailRailRef.current) {
+      setVisibleCompactThumbnailIds([]);
+      return;
+    }
+
+    let frameId = 0;
+    const visibleThumbnailRatios = new Map<string, number>();
+    const flushVisibleThumbnails = () => {
+      frameId = 0;
+      const sortedIds = [...visibleThumbnailRatios.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .map(([pageId]) => pageId);
+
+      setVisibleCompactThumbnailIds((current) => {
+        if (current.length === sortedIds.length && current.every((pageId, index) => pageId === sortedIds[index])) {
+          return current;
+        }
+        return sortedIds;
+      });
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const pageId = (entry.target as HTMLElement).dataset.pageId;
+          if (!pageId) {
+            return;
+          }
+
+          if (entry.isIntersecting) {
+            visibleThumbnailRatios.set(pageId, entry.intersectionRatio);
+            return;
+          }
+
+          visibleThumbnailRatios.delete(pageId);
+        });
+
+        if (frameId === 0) {
+          frameId = window.requestAnimationFrame(flushVisibleThumbnails);
+        }
+      },
+      {
+        root: compactThumbnailRailRef.current,
+        rootMargin: "0px 240px 0px 240px",
+        threshold: [0.01, 0.35, 0.7]
+      }
+    );
+
+    thumbnailElementRefs.current.forEach((node) => observer.observe(node));
+
+    return () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+      observer.disconnect();
+    };
+  }, [bundle, compactPagesOpen, isCompactLayout]);
+
+  useEffect(() => {
     if (!bundle || !pagePanelRef.current) {
       return;
     }
@@ -529,7 +601,7 @@ export function EditorPage() {
       },
       {
         root: pagePanelRef.current,
-        threshold: [0.08, 0.2, 0.45, 0.7, 0.9]
+        threshold: [0.12, 0.55]
       }
     );
 
@@ -631,38 +703,44 @@ export function EditorPage() {
   const compactInkColors = inkColors.filter(
     (candidate) => candidate === inkColors[0] || candidate === inkColors[1] || candidate === inkColors[5] || candidate === inkColor
   );
+  const visibleCompactThumbnailIdSet = new Set(visibleCompactThumbnailIds);
+  const shouldBuildThumbnails = !isCompactLayout || compactPagesOpen;
 
-  const thumbnailRailContent = bundle.pages.map((page) => {
-    const thumbnailFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
+  const thumbnailRailContent = shouldBuildThumbnails
+    ? bundle.pages.map((page) => {
+        const thumbnailFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
+        const shouldRenderPreview = previewWindow.has(page.id) || visibleCompactThumbnailIdSet.has(page.id);
 
-    return (
-      <button
-        className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
-        data-page-id={page.id}
-        key={page.id}
-        onClick={() => focusPage(page.id)}
-        type="button"
-      >
-        <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
-          {page.kind === "pdf" && thumbnailFileUrl ? (
-            previewWindow.has(page.id) ? (
-              <PdfThumbnail
-                height={page.height}
-                pageIndex={page.sourcePageIndex ?? 0}
-                url={thumbnailFileUrl}
-                width={page.width}
-              />
-            ) : (
-              <span>Page {page.position}</span>
-            )
-          ) : (
-            <span>{page.kind === "pdf" ? "PDF" : page.template ?? "blank"}</span>
-          )}
-        </div>
-        <span>Page {page.position}</span>
-      </button>
-    );
-  });
+        return (
+          <button
+            className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
+            data-page-id={page.id}
+            key={page.id}
+            onClick={() => focusPage(page.id)}
+            ref={(node) => setThumbnailNode(page.id, node)}
+            type="button"
+          >
+            <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
+              {page.kind === "pdf" && thumbnailFileUrl ? (
+                shouldRenderPreview ? (
+                  <PdfThumbnail
+                    height={page.height}
+                    pageIndex={page.sourcePageIndex ?? 0}
+                    url={thumbnailFileUrl}
+                    width={page.width}
+                  />
+                ) : (
+                  <span>Page {page.position}</span>
+                )
+              ) : (
+                <span>{page.kind === "pdf" ? "PDF" : page.template ?? "blank"}</span>
+              )}
+            </div>
+            <span>Page {page.position}</span>
+          </button>
+        );
+      })
+    : null;
 
   const pageActionsPanel = (
     <>
@@ -989,6 +1067,10 @@ export function EditorPage() {
           </div>
         </section>
 
+        <div className={`editor-page-indicator ${isCompactLayout && compactPagesOpen ? "tray-open" : ""}`}>
+          {activePage?.position ?? 1} of {bundle.document.pageCount}
+        </div>
+
         {!isCompactLayout ? (
           <aside className="inspector-panel">
             <section className="inspector-card">{pageActionsPanel}</section>
@@ -1016,7 +1098,9 @@ export function EditorPage() {
               <strong>Pages</strong>
               <span>{bundle.document.pageCount} total</span>
             </div>
-            <div className="compact-thumbnail-row">{thumbnailRailContent}</div>
+            <div className="compact-thumbnail-row" ref={compactThumbnailRailRef}>
+              {thumbnailRailContent}
+            </div>
           </aside>
         ) : null}
 

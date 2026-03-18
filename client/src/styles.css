@@ -197,6 +197,26 @@ a {
   overflow: auto;
 }
 
+.editor-page-indicator {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 3;
+  pointer-events: none;
+  padding: 0.55rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(24, 20, 18, 0.72);
+  color: #fff8ef;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 34px rgba(10, 18, 27, 0.18);
+  font-size: 0.95rem;
+}
+
+.editor-page-indicator.tray-open {
+  bottom: 13.5rem;
+}
+
 .compact-editor-body {
   grid-template-columns: 1fr;
 }
@@ -830,6 +850,7 @@ a {
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 0.15rem;
+  scroll-behavior: smooth;
 }
 
 .compact-thumbnail-row .thumbnail-card {
