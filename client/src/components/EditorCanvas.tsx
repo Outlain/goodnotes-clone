@@ -85,7 +85,9 @@ export function EditorCanvas({
 
     const updateWidth = (nextWidth?: number) => {
       const measuredWidth = nextWidth ?? shellNode.clientWidth;
-      setAvailableWidth(Math.max(0, measuredWidth - 12));
+      const shellStyle = window.getComputedStyle(shellNode);
+      const horizontalPadding = Number.parseFloat(shellStyle.paddingLeft) + Number.parseFloat(shellStyle.paddingRight);
+      setAvailableWidth(Math.max(0, measuredWidth - horizontalPadding));
     };
 
     updateWidth();

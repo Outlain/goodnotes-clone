@@ -207,6 +207,10 @@ a {
 
 .page-stage-shell {
   padding: 1rem;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
 }
 
 .page-stack {
