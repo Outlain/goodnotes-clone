@@ -63,10 +63,12 @@ export function EditorCanvas({
   palmSettings,
   onChange
 }: EditorCanvasProps) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
+  const [availableWidth, setAvailableWidth] = useState(0);
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
 
@@ -74,6 +76,30 @@ export function EditorCanvas({
     setDraftStroke(null);
     setEditingTextId(null);
   }, [page.id]);
+
+  useEffect(() => {
+    const shellNode = shellRef.current;
+    if (!shellNode || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const updateWidth = (nextWidth?: number) => {
+      const measuredWidth = nextWidth ?? shellNode.clientWidth;
+      setAvailableWidth(Math.max(0, measuredWidth - 12));
+    };
+
+    updateWidth();
+
+    const observer = new ResizeObserver((entries) => {
+      updateWidth(entries[0]?.contentRect.width);
+    });
+
+    observer.observe(shellNode);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -227,14 +253,17 @@ export function EditorCanvas({
     setEditingTextId(null);
   }
 
+  const fitScale = availableWidth > 0 ? availableWidth / page.width : 1;
+  const renderZoom = Math.max(0.2, fitScale * zoom);
+
   return (
-    <div className="page-stage-shell">
+    <div className="page-stage-shell" ref={shellRef}>
       <div
         className="page-stage"
         ref={stageRef}
         style={{
-          width: `${page.width * zoom}px`,
-          height: `${page.height * zoom}px`
+          width: `${page.width * renderZoom}px`,
+          height: `${page.height * renderZoom}px`
         }}
       >
         {page.kind === "pdf" && fileUrl ? (
@@ -243,7 +272,7 @@ export function EditorCanvas({
             url={fileUrl}
             width={page.width}
             height={page.height}
-            zoom={zoom}
+            zoom={renderZoom}
           />
         ) : page.kind === "pdf" ? (
           <div className="page-fallback">The PDF source for this page is missing.</div>
@@ -294,12 +323,12 @@ export function EditorCanvas({
           }
 
           const sharedStyle = {
-            left: `${annotation.x * zoom}px`,
-            top: `${annotation.y * zoom}px`,
-            width: `${annotation.width * zoom}px`,
-            minHeight: `${annotation.height * zoom}px`,
+            left: `${annotation.x * renderZoom}px`,
+            top: `${annotation.y * renderZoom}px`,
+            width: `${annotation.width * renderZoom}px`,
+            minHeight: `${annotation.height * renderZoom}px`,
             color: annotation.color,
-            fontSize: `${annotation.fontSize * zoom}px`
+            fontSize: `${annotation.fontSize * renderZoom}px`
           };
 
           if (editingTextId === annotation.id) {

@@ -609,6 +609,7 @@ export function EditorPage() {
           .map((page) => page.id)
       : bundle.pages.slice(0, 3).map((page) => page.id)
   );
+  const compactSaveLabel = saveState === "All changes saved" ? "Saved" : saveState;
 
   const thumbnailRailContent = bundle.pages.map((page) => {
     const thumbnailFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
@@ -822,7 +823,7 @@ export function EditorPage() {
 
       {isCompactLayout ? (
         <section className="compact-tool-dock">
-          <div className="compact-tool-row">
+          <div className="compact-tool-scroll">
             <button aria-label="Undo" className="compact-tool-button" disabled={!canUndo} onClick={undoPageChange} type="button">
               <IconGlyph name="undo" />
             </button>
@@ -840,9 +841,6 @@ export function EditorPage() {
                 <IconGlyph name={candidate.icon} />
               </button>
             ))}
-          </div>
-
-          <div className="compact-tool-row compact-tool-row-secondary">
             <div className="compact-color-strip">
               {inkColors.map((candidate) => (
                 <button
@@ -856,7 +854,7 @@ export function EditorPage() {
               ))}
             </div>
             <label className="compact-stroke-control">
-              <span>Stroke {strokeWidth}px</span>
+              <span>{strokeWidth}px</span>
               <input
                 max={14}
                 min={1}
@@ -865,7 +863,16 @@ export function EditorPage() {
                 onChange={(event) => setStrokeWidth(Number(event.target.value))}
               />
             </label>
-            <span className="save-pill">{saveState}</span>
+            <div className="compact-zoom-group">
+              <button aria-label="Zoom out" className="compact-tool-button compact-zoom-button" onClick={() => setZoom((current) => clampZoom(current - 0.1))} type="button">
+                -
+              </button>
+              <span className="save-pill compact-zoom-pill">{Math.round(zoom * 100)}%</span>
+              <button aria-label="Zoom in" className="compact-tool-button compact-zoom-button" onClick={() => setZoom((current) => clampZoom(current + 0.1))} type="button">
+                +
+              </button>
+            </div>
+            <span className="save-pill compact-save-pill">{compactSaveLabel}</span>
           </div>
         </section>
       ) : (

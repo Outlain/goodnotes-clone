@@ -202,7 +202,7 @@ a {
 }
 
 .compact-page-panel {
-  padding: 8rem 0.85rem 1.2rem;
+  padding: 5.75rem 0.2rem 0.9rem;
 }
 
 .page-stage-shell {
@@ -609,10 +609,22 @@ a {
   display: none;
 }
 
-.compact-tool-row {
+.compact-tool-row,
+.compact-tool-scroll {
   display: flex;
   align-items: center;
   gap: 0.55rem;
+}
+
+.compact-tool-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.1rem;
+  scrollbar-width: none;
+}
+
+.compact-tool-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .compact-tool-row-secondary {
@@ -621,9 +633,9 @@ a {
 }
 
 .compact-tool-button {
-  width: 2.9rem;
-  height: 2.9rem;
-  border-radius: 16px;
+  width: 2.65rem;
+  height: 2.65rem;
+  border-radius: 15px;
   border: 1px solid rgba(24, 49, 79, 0.12);
   background: rgba(255, 252, 245, 0.82);
   color: var(--ink);
@@ -659,15 +671,44 @@ a {
   display: flex;
   align-items: center;
   gap: 0.7rem;
-  padding: 0.4rem 0.8rem;
+  padding: 0.32rem 0.75rem;
   border-radius: 999px;
   background: rgba(255, 253, 247, 0.82);
   border: 1px solid rgba(24, 49, 79, 0.12);
   color: var(--muted);
+  flex: 0 0 auto;
 }
 
 .compact-stroke-control input {
-  width: 110px;
+  width: 92px;
+}
+
+.compact-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
+.compact-zoom-button {
+  width: 2.3rem;
+  height: 2.3rem;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.compact-zoom-pill,
+.compact-save-pill {
+  white-space: nowrap;
+}
+
+.compact-zoom-pill {
+  min-width: 4.1rem;
+  text-align: center;
+}
+
+.compact-save-pill {
+  padding-inline: 0.65rem;
 }
 
 .compact-overlay-dismiss {
@@ -890,15 +931,15 @@ a {
 
   .compact-tool-dock {
     display: grid;
-    gap: 0.65rem;
+    gap: 0;
     position: absolute;
     top: 5.8rem;
     left: 50%;
     transform: translateX(-50%);
     z-index: 6;
-    width: min(calc(100% - 1.5rem), 720px);
-    padding: 0.7rem 0.85rem;
-    border-radius: 26px;
+    width: min(calc(100% - 1rem), 820px);
+    padding: 0.55rem 0.7rem;
+    border-radius: 22px;
     background: rgba(24, 20, 18, 0.88);
     color: #fffaf2;
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -914,6 +955,14 @@ a {
   .compact-tool-dock .color-button.active {
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.28);
   }
+
+  .compact-layout .page-stage-shell {
+    padding: 0.35rem 0;
+  }
+
+  .compact-layout .page-panel {
+    border-radius: 24px;
+  }
 }
 
 @media (max-width: 800px) {
@@ -925,15 +974,11 @@ a {
     width: calc(100% - 1rem);
     left: 0.5rem;
     transform: none;
-    top: 5.4rem;
-  }
-
-  .compact-tool-row {
-    flex-wrap: wrap;
+    top: 5.1rem;
   }
 
   .compact-page-panel {
-    padding-top: 10.25rem;
+    padding-top: 5.15rem;
   }
 
   .compact-view-grid {
