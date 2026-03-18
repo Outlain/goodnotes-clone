@@ -13,6 +13,7 @@ const MAX_RENDER_PIXELS = 3_200_000;
 
 export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>("");
 
@@ -33,10 +34,33 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
       try {
         if (!cancelled) {
           setIsLoading(true);
+          setError("");
+        }
+
+        const previousTask = renderTaskRef.current;
+        if (previousTask) {
+          previousTask.cancel();
+          try {
+            await previousTask.promise;
+          } catch {
+            // Ignore cancellation rejections from the previous render.
+          }
+          if (renderTaskRef.current === previousTask) {
+            renderTaskRef.current = null;
+          }
         }
 
         const pdf = await loadPdf(url);
+        if (cancelled) {
+          return;
+        }
+
         const page = await pdf.getPage(pageIndex + 1);
+        if (cancelled) {
+          page.cleanup();
+          return;
+        }
+
         const deviceScale = window.devicePixelRatio || 1;
         const requestedScale = zoom * deviceScale;
         const maxScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(width * height, 1));
@@ -49,10 +73,17 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
         canvas.style.height = `${height * zoom}px`;
         context.clearRect(0, 0, canvas.width, canvas.height);
 
-        await page.render({
+        const renderTask = page.render({
           canvasContext: context,
           viewport
-        }).promise;
+        });
+        renderTaskRef.current = renderTask;
+
+        await renderTask.promise;
+
+        if (renderTaskRef.current === renderTask) {
+          renderTaskRef.current = null;
+        }
 
         page.cleanup();
 
@@ -61,6 +92,16 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
           setIsLoading(false);
         }
       } catch (nextError) {
+        const isCancelledError =
+          cancelled ||
+          (nextError instanceof Error &&
+            (nextError.name === "RenderingCancelledException" ||
+              nextError.message.toLowerCase().includes("cancelled")));
+
+        if (isCancelledError) {
+          return;
+        }
+
         console.error("[Inkflow] PDF page render failed.", {
           url,
           pageIndex,
@@ -78,6 +119,7 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
 
     return () => {
       cancelled = true;
+      renderTaskRef.current?.cancel();
     };
   }, [height, pageIndex, url, width, zoom]);
 

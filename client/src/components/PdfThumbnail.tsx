@@ -10,6 +10,7 @@ interface PdfThumbnailProps {
 
 export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -27,8 +28,32 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
       }
 
       try {
+        setError("");
+
+        const previousTask = renderTaskRef.current;
+        if (previousTask) {
+          previousTask.cancel();
+          try {
+            await previousTask.promise;
+          } catch {
+            // Ignore cancellation rejections from the previous render.
+          }
+          if (renderTaskRef.current === previousTask) {
+            renderTaskRef.current = null;
+          }
+        }
+
         const pdf = await loadPdf(url);
+        if (cancelled) {
+          return;
+        }
+
         const page = await pdf.getPage(pageIndex + 1);
+        if (cancelled) {
+          page.cleanup();
+          return;
+        }
+
         const deviceScale = window.devicePixelRatio || 1;
         const scale = Math.min((100 / width) * deviceScale, (140 / height) * deviceScale);
         const viewport = page.getViewport({ scale });
@@ -39,15 +64,34 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
         canvas.style.height = "100%";
         context.clearRect(0, 0, canvas.width, canvas.height);
 
-        await page.render({
+        const renderTask = page.render({
           canvasContext: context,
           viewport
-        }).promise;
+        });
+        renderTaskRef.current = renderTask;
+
+        await renderTask.promise;
+
+        if (renderTaskRef.current === renderTask) {
+          renderTaskRef.current = null;
+        }
+
+        page.cleanup();
 
         if (!cancelled) {
           setError("");
         }
       } catch (nextError) {
+        const isCancelledError =
+          cancelled ||
+          (nextError instanceof Error &&
+            (nextError.name === "RenderingCancelledException" ||
+              nextError.message.toLowerCase().includes("cancelled")));
+
+        if (isCancelledError) {
+          return;
+        }
+
         console.error("[Inkflow] Thumbnail render failed.", {
           url,
           pageIndex,
@@ -64,6 +108,7 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
 
     return () => {
       cancelled = true;
+      renderTaskRef.current?.cancel();
     };
   }, [height, pageIndex, url, width]);
 

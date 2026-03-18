@@ -610,6 +610,9 @@ export function EditorPage() {
       : bundle.pages.slice(0, 3).map((page) => page.id)
   );
   const compactSaveLabel = saveState === "All changes saved" ? "Saved" : saveState;
+  const compactInkColors = inkColors.filter(
+    (candidate) => candidate === inkColors[0] || candidate === inkColors[1] || candidate === inkColors[5] || candidate === inkColor
+  );
 
   const thumbnailRailContent = bundle.pages.map((page) => {
     const thumbnailFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
@@ -842,7 +845,7 @@ export function EditorPage() {
               </button>
             ))}
             <div className="compact-color-strip">
-              {inkColors.map((candidate) => (
+              {compactInkColors.map((candidate) => (
                 <button
                   aria-label={`Choose ${candidate}`}
                   className={`color-button compact-color-button ${inkColor === candidate ? "active" : ""}`}
