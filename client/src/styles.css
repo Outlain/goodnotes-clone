@@ -273,6 +273,10 @@ a {
   touch-action: none;
 }
 
+.annotation-touch-scroll {
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
 .annotation-hand {
   pointer-events: none;
 }
@@ -289,6 +293,7 @@ a {
   text-align: left;
   resize: none;
   outline: 1px dashed rgba(24, 49, 79, 0.18);
+  touch-action: manipulation;
 }
 
 .text-annotation {

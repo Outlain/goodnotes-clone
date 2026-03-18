@@ -257,6 +257,13 @@ export function EditorCanvas({
 
   const fitScale = availableWidth > 0 ? availableWidth / page.width : 1;
   const renderZoom = Math.max(0.2, fitScale * zoom);
+  const annotationLayerClassName = [
+    "annotation-layer",
+    tool === "hand" ? "annotation-hand" : "",
+    palmSettings.stylusOnly ? "annotation-touch-scroll" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div className="page-stage-shell" ref={shellRef}>
@@ -283,7 +290,7 @@ export function EditorCanvas({
         )}
 
         <svg
-          className={`annotation-layer ${tool === "hand" ? "annotation-hand" : ""}`}
+          className={annotationLayerClassName}
           ref={svgRef}
           viewBox={`0 0 ${page.width} ${page.height}`}
           onPointerDown={handlePointerDown}
