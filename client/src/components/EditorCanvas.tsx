@@ -245,6 +245,8 @@ export function EditorCanvas({
             height={page.height}
             zoom={zoom}
           />
+        ) : page.kind === "pdf" ? (
+          <div className="page-fallback">The PDF source for this page is missing.</div>
         ) : (
           <PagePaper template={page.template} />
         )}

@@ -8,13 +8,20 @@ export function loadPdf(url: string): Promise<PDFDocumentProxy> {
   if (!pdfCache.has(url)) {
     pdfCache.set(
       url,
-      getDocument({
-        url,
-        withCredentials: true
-      }).promise
+      (async () => {
+        const response = await fetch(url, {
+          credentials: "include"
+        });
+
+        if (!response.ok) {
+          throw new Error(`PDF fetch failed with status ${response.status}.`);
+        }
+
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        return getDocument({ data: bytes }).promise;
+      })()
     );
   }
 
   return pdfCache.get(url) as Promise<PDFDocumentProxy>;
 }
-

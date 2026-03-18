@@ -11,6 +11,7 @@ interface PdfPageLayerProps {
 
 export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>("");
 
   useEffect(() => {
@@ -28,6 +29,10 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
       }
 
       try {
+        if (!cancelled) {
+          setIsLoading(true);
+        }
+
         const pdf = await loadPdf(url);
         const page = await pdf.getPage(pageIndex + 1);
         const deviceScale = window.devicePixelRatio || 1;
@@ -46,10 +51,12 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
 
         if (!cancelled) {
           setError("");
+          setIsLoading(false);
         }
       } catch (nextError) {
         if (!cancelled) {
           setError(nextError instanceof Error ? nextError.message : "Could not render PDF page.");
+          setIsLoading(false);
         }
       }
     }
@@ -64,8 +71,8 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
   return (
     <>
       <canvas className="pdf-canvas" ref={canvasRef} />
+      {isLoading && !error ? <div className="page-fallback">Loading PDF page...</div> : null}
       {error ? <div className="page-fallback">PDF preview failed: {error}</div> : null}
     </>
   );
 }
-
