@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { loadPdf } from "../lib/pdf";
+import { getCachedPageSnapshot, loadPdfPage, storePageSnapshot } from "../lib/pdf";
 
 interface PdfPageLayerProps {
   pageIndex: number;
@@ -32,6 +32,14 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
       }
 
       try {
+        const deviceScale = window.devicePixelRatio || 1;
+        const requestedScale = zoom * deviceScale;
+        const maxScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(width * height, 1));
+        const effectiveScale = Math.min(requestedScale, maxScale);
+        const cacheKey = `${url}|${pageIndex}|${effectiveScale.toFixed(3)}`;
+        canvas.style.width = `${width * zoom}px`;
+        canvas.style.height = `${height * zoom}px`;
+
         if (!cancelled) {
           setIsLoading(true);
           setError("");
@@ -50,27 +58,29 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
           }
         }
 
-        const pdf = await loadPdf(url);
-        if (cancelled) {
+        const cachedSnapshot = getCachedPageSnapshot(cacheKey);
+        if (cachedSnapshot) {
+          canvas.width = cachedSnapshot.width;
+          canvas.height = cachedSnapshot.height;
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(cachedSnapshot, 0, 0);
+
+          if (!cancelled) {
+            setError("");
+            setIsLoading(false);
+          }
           return;
         }
 
-        const page = await pdf.getPage(pageIndex + 1);
+        const page = await loadPdfPage(url, pageIndex + 1);
         if (cancelled) {
           page.cleanup();
           return;
         }
-
-        const deviceScale = window.devicePixelRatio || 1;
-        const requestedScale = zoom * deviceScale;
-        const maxScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(width * height, 1));
-        const effectiveScale = Math.min(requestedScale, maxScale);
         const viewport = page.getViewport({ scale: effectiveScale });
 
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        canvas.style.width = `${width * zoom}px`;
-        canvas.style.height = `${height * zoom}px`;
         context.clearRect(0, 0, canvas.width, canvas.height);
 
         const renderTask = page.render({
@@ -86,6 +96,7 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
         }
 
         page.cleanup();
+        storePageSnapshot(cacheKey, canvas);
 
         if (!cancelled) {
           setError("");

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { loadPdf } from "../lib/pdf";
+import { getCachedThumbnailSnapshot, loadPdfPage, storeThumbnailSnapshot } from "../lib/pdf";
 
 interface PdfThumbnailProps {
   pageIndex: number;
@@ -30,6 +30,12 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
       try {
         setError("");
 
+        const deviceScale = window.devicePixelRatio || 1;
+        const scale = Math.min((100 / width) * deviceScale, (140 / height) * deviceScale);
+        const cacheKey = `${url}|${pageIndex}|thumb|${scale.toFixed(3)}`;
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+
         const previousTask = renderTaskRef.current;
         if (previousTask) {
           previousTask.cancel();
@@ -43,25 +49,25 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
           }
         }
 
-        const pdf = await loadPdf(url);
-        if (cancelled) {
+        const cachedSnapshot = getCachedThumbnailSnapshot(cacheKey);
+        if (cachedSnapshot) {
+          canvas.width = cachedSnapshot.width;
+          canvas.height = cachedSnapshot.height;
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(cachedSnapshot, 0, 0);
           return;
         }
 
-        const page = await pdf.getPage(pageIndex + 1);
+        const page = await loadPdfPage(url, pageIndex + 1);
         if (cancelled) {
           page.cleanup();
           return;
         }
 
-        const deviceScale = window.devicePixelRatio || 1;
-        const scale = Math.min((100 / width) * deviceScale, (140 / height) * deviceScale);
         const viewport = page.getViewport({ scale });
 
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        canvas.style.width = "100%";
-        canvas.style.height = "100%";
         context.clearRect(0, 0, canvas.width, canvas.height);
 
         const renderTask = page.render({
@@ -77,6 +83,7 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
         }
 
         page.cleanup();
+        storeThumbnailSnapshot(cacheKey, canvas);
 
         if (!cancelled) {
           setError("");

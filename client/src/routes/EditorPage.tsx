@@ -4,12 +4,14 @@ import { EditorCanvas } from "../components/EditorCanvas";
 import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
 import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
+import { loadPdfPage } from "../lib/pdf";
 import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
 const THUMBNAIL_PREVIEW_RADIUS = 3;
 const RENDER_AHEAD_RADIUS = 2;
+const PREFETCH_RADIUS = 6;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
@@ -493,7 +495,6 @@ export function EditorPage() {
 
   useEffect(() => {
     if (!bundle || !isCompactLayout || !compactPagesOpen || !compactThumbnailRailRef.current) {
-      setVisibleCompactThumbnailIds([]);
       return;
     }
 
@@ -614,6 +615,32 @@ export function EditorPage() {
       observer.disconnect();
     };
   }, [bundle]);
+
+  useEffect(() => {
+    if (!bundle) {
+      return;
+    }
+
+    const currentPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
+    if (!currentPage) {
+      return;
+    }
+
+    const warmPages = bundle.pages.filter(
+      (page) => page.kind === "pdf" && Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS && page.sourceFileId
+    );
+
+    warmPages.forEach((page) => {
+      const sourceFile = bundle.files.find((file) => file.id === page.sourceFileId);
+      if (!sourceFile) {
+        return;
+      }
+
+      loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1).catch(() => {
+        // Best-effort warm cache only.
+      });
+    });
+  }, [activePageId, bundle]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
