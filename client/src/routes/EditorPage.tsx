@@ -486,7 +486,7 @@ export function EditorPage() {
       return;
     }
 
-    const selectedThumbnail = document.querySelector<HTMLElement>(`[data-page-id="${activePageId}"]`);
+    const selectedThumbnail = thumbnailElementRefs.current.get(activePageId);
     selectedThumbnail?.scrollIntoView({
       block: "nearest",
       inline: "nearest"
