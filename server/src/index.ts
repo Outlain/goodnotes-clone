@@ -31,7 +31,7 @@ app.use("/api", requireSession, libraryRouter);
 
 if (existsSync(env.publicDir)) {
   app.use(express.static(env.publicDir));
-  app.get("*", (request, response, next) => {
+  app.use((request, response, next) => {
     if (request.path.startsWith("/api/")) {
       next();
       return;
@@ -40,7 +40,7 @@ if (existsSync(env.publicDir)) {
     response.sendFile(path.join(env.publicDir, "index.html"));
   });
 } else {
-  app.get("*", (_request, response) => {
+  app.use((_request, response) => {
     response
       .status(503)
       .send("The web client has not been built yet. Run the client build or use Docker for production.");
