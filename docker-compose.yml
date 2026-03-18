@@ -8,10 +8,15 @@ services:
     #   dockerfile: Dockerfile
     ports:
       - "3000:3000"
-    env_file:
-      # This file stays next to docker-compose.yml on the host.
-      # It is not stored inside /app/data.
-      - .env
+    environment:
+      # Container listening port
+      PORT: "3000"
+      # Keep app data inside the mounted persistent volume
+      DATA_DIR: /app/data
+      # Replace this with your own long random secret before deploying
+      SESSION_SECRET: change-this-to-a-long-random-secret
+      # Optional. Leave blank to disable the login screen
+      APP_PASSWORD: ""
     volumes:
       # This is the only persistent mount the app needs.
       # The app will create the SQLite database and upload folders inside it on first start.

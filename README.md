@@ -37,21 +37,20 @@ Those are intentionally left as future extensions instead of being claimed witho
 ## Local development
 
 1. Use Node 20 or newer.
-2. Copy `.env.example` to `.env`.
-3. Install dependencies:
+2. Install dependencies:
 
 ```bash
 npm --prefix server install
 npm --prefix client install
 ```
 
-4. In one terminal, run the API:
+3. In one terminal, run the API with environment variables in the shell:
 
 ```bash
-npm run dev:server
+PORT=3000 DATA_DIR=./data SESSION_SECRET=development-session-secret APP_PASSWORD= npm run dev:server
 ```
 
-5. In another terminal, run the web app:
+4. In another terminal, run the web app:
 
 ```bash
 npm run dev:client
@@ -59,12 +58,13 @@ npm run dev:client
 
 The Vite client proxies `/api` requests to `http://localhost:3000`.
 
+Note: the Node server does not automatically read a `.env` file during local development. If you want that workflow, use your shell, `direnv`, Portainer stack variables, or another environment manager.
+
 ## Docker
 
 Build and run locally:
 
 ```bash
-cp .env.example .env
 docker compose up --build
 ```
 
@@ -110,53 +110,47 @@ Yes. If `./data` is empty, the app creates what it needs on startup:
 
 You do not need to pre-create any files inside `./data`.
 
-### Does `.env` go inside `./data`?
+### Where do the settings go now?
 
-No. `.env` should stay next to `docker-compose.yml`, not inside `./data`.
-
-With this Compose section:
+The default Compose file now uses an inline `environment:` block instead of an external `.env` file:
 
 ```yaml
-env_file:
-  - .env
+environment:
+  PORT: "3000"
+  DATA_DIR: /app/data
+  SESSION_SECRET: change-this-to-a-long-random-secret
+  APP_PASSWORD: ""
 ```
 
-Docker reads environment variables from a host file called `.env` in the project directory and passes them into the container.
+That makes the stack easier to paste directly into Portainer and easier to read at a glance.
 
-So the two host-side paths have different jobs:
+So now the host-side setup is simply:
 
-- `.env` - configuration values for the container
+- `docker-compose.yml` - container definition and settings
 - `./data` - persistent app data created and used by the app
 
-The app will not create `.env` for you. Create it once by copying `.env.example`.
+You do not need a `.env` file for the default Docker setup anymore.
 
 ### Typical first-time setup
 
-1. Create the env file:
-
-```bash
-cp .env.example .env
-```
-
-2. Edit `.env` and set at least:
+1. Edit `docker-compose.yml` and set at least:
 
 - `SESSION_SECRET` to a long random string
 - `APP_PASSWORD` if you want a login gate
 
-3. Start the container:
+2. Start the container:
 
 ```bash
 docker compose up -d
 ```
 
-4. On first boot, the app populates the mounted `./data` folder automatically.
+3. On first boot, the app populates the mounted `./data` folder automatically.
 
 ### Example production layout
 
 ```text
 goodnotes-clone/
   docker-compose.yml
-  .env
   data/
 ```
 
@@ -194,18 +188,93 @@ volumes:
   inkflow_data:
 ```
 
+### Portainer-friendly stack example
+
+```yaml
+services:
+  inkflow:
+    image: ghcr.io/outlain/goodnotes-clone:latest
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      DATA_DIR: /app/data
+      SESSION_SECRET: replace-this-with-a-long-random-secret
+      APP_PASSWORD: ""
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+For most deployments you only need to change:
+
+- `SESSION_SECRET`
+- `APP_PASSWORD` if you want the login screen enabled
+- the left side of the volume mount if you want the data stored somewhere else on the host
+
 ## Environment variables
 
 - `PORT`: HTTP port for the server
 - `DATA_DIR`: data directory for SQLite and uploads. In Docker, keep this as `/app/data`.
-- `SESSION_SECRET`: cookie signing secret
+- `SESSION_SECRET`: secret key used to sign the session cookie after login
 - `APP_PASSWORD`: optional shared password for the deployment. Leave blank to disable the login screen.
+
+### Authentication variables explained
+
+#### `SESSION_SECRET`
+
+`SESSION_SECRET` is the secret key the server uses to sign the login session cookie.
+
+In this app, when someone logs in successfully, the server creates a cookie and signs it with HMAC-SHA256 using `SESSION_SECRET`. That signature lets the server verify that:
+
+- the cookie was created by this server
+- the cookie was not tampered with by the browser or a third party
+- an attacker cannot just make up a fake "logged in" cookie
+
+Think of it as the private signing key for browser login sessions.
+
+Important details:
+
+- it is not the same thing as `APP_PASSWORD`
+- users never type it into the UI
+- it should be a long random string
+- if you change it later, existing login sessions become invalid and users will need to log in again
+- do not commit a real `SESSION_SECRET` to GitHub
+
+Example of a good value:
+
+```text
+3dc0f2d71e864c2c85d262bb8d2a3f4af7fce2d2b4b526efc1d8c935ad8df0ce
+```
+
+#### `APP_PASSWORD`
+
+`APP_PASSWORD` is the actual shared password people type into the login screen.
+
+If it is set:
+
+- the app shows a login screen
+- the user must enter that password
+- after successful login, the server issues a signed session cookie using `SESSION_SECRET`
+
+If it is blank:
+
+- the login screen is disabled
+- no password is required
+- anyone who can reach the app can use it
+
+So yes, `APP_PASSWORD` is completely optional, but "optional" only means authentication is disabled. That is safe only if:
+
+- the app is on a private network you trust
+- or you already protect it with something else such as a reverse proxy auth layer, VPN, or private tunnel
+
+If the app is exposed to the public internet, you should set `APP_PASSWORD`.
 
 ## Deployment notes
 
 - The included GitHub Action builds and publishes a Docker image to GHCR.
 - This repo's GHCR image path is `ghcr.io/outlain/goodnotes-clone:latest`.
-- If you deploy publicly, set a strong `SESSION_SECRET` and `APP_PASSWORD`.
+- If you deploy publicly, set a strong `SESSION_SECRET` and set `APP_PASSWORD` unless another auth layer protects the app.
 - Back up the mounted `data` volume regularly because it contains both the notes database and uploaded source PDFs.
 
 ## Goodnotes-inspired behavior
