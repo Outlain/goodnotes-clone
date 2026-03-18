@@ -8,7 +8,8 @@ import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
-const THUMBNAIL_PREVIEW_RADIUS = 8;
+const THUMBNAIL_PREVIEW_RADIUS = 4;
+const RENDER_AHEAD_RADIUS = 4;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
@@ -150,6 +151,7 @@ export function EditorPage() {
   const pagePanelRef = useRef<HTMLElement | null>(null);
   const pageElementRefs = useRef(new Map<string, HTMLDivElement>());
   const visibleRatiosRef = useRef(new Map<string, number>());
+  const activePageIdRef = useRef("");
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -228,6 +230,10 @@ export function EditorPage() {
     visibleRatiosRef.current.clear();
     setVisiblePageIds([]);
   }, [documentId]);
+
+  useEffect(() => {
+    activePageIdRef.current = activePageId;
+  }, [activePageId]);
 
   useEffect(() => {
     if (!isCompactLayout) {
@@ -461,7 +467,7 @@ export function EditorPage() {
   }
 
   useEffect(() => {
-    if (!activePageId) {
+    if (!activePageId || (isCompactLayout && !compactPagesOpen)) {
       return;
     }
 
@@ -470,12 +476,33 @@ export function EditorPage() {
       block: "nearest",
       inline: "nearest"
     });
-  }, [activePageId]);
+  }, [activePageId, compactPagesOpen, isCompactLayout]);
 
   useEffect(() => {
     if (!bundle || !pagePanelRef.current) {
       return;
     }
+
+    let frameId = 0;
+    const flushVisiblePages = () => {
+      frameId = 0;
+      const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .map(([pageId]) => pageId);
+
+      setVisiblePageIds((current) => {
+        if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
+          return current;
+        }
+        return sortedVisibleIds;
+      });
+
+      const mostVisiblePageId = sortedVisibleIds[0];
+      if (mostVisiblePageId && mostVisiblePageId !== activePageIdRef.current) {
+        activePageIdRef.current = mostVisiblePageId;
+        setActivePageId(mostVisiblePageId);
+      }
+    };
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -496,20 +523,8 @@ export function EditorPage() {
         });
 
         visibleRatiosRef.current = nextRatios;
-        const sortedVisibleIds = [...nextRatios.entries()]
-          .sort((left, right) => right[1] - left[1])
-          .map(([pageId]) => pageId);
-
-        setVisiblePageIds((current) => {
-          if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
-            return current;
-          }
-          return sortedVisibleIds;
-        });
-
-        const mostVisiblePageId = sortedVisibleIds[0];
-        if (mostVisiblePageId && mostVisiblePageId !== activePageId) {
-          setActivePageId(mostVisiblePageId);
+        if (frameId === 0) {
+          frameId = window.requestAnimationFrame(flushVisiblePages);
         }
       },
       {
@@ -521,9 +536,12 @@ export function EditorPage() {
     pageElementRefs.current.forEach((node) => observer.observe(node));
 
     return () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
       observer.disconnect();
     };
-  }, [activePageId, bundle]);
+  }, [bundle]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -605,7 +623,7 @@ export function EditorPage() {
   const renderedPageIdSet = new Set(
     activePage
       ? bundle.pages
-          .filter((page) => visiblePageIdSet.has(page.id) || Math.abs(page.position - activePage.position) <= 2)
+          .filter((page) => visiblePageIdSet.has(page.id) || Math.abs(page.position - activePage.position) <= RENDER_AHEAD_RADIUS)
           .map((page) => page.id)
       : bundle.pages.slice(0, 3).map((page) => page.id)
   );
