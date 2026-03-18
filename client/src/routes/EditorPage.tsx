@@ -168,6 +168,7 @@ export function EditorPage() {
   const [insertTemplate, setInsertTemplate] = useState<PageTemplate>("ruled");
   const [saveState, setSaveState] = useState("All changes saved");
   const [titleDraft, setTitleDraft] = useState("");
+  const [pagePanelViewportWidth, setPagePanelViewportWidth] = useState(0);
   const [visiblePageIds, setVisiblePageIds] = useState<string[]>([]);
   const [visibleCompactThumbnailIds, setVisibleCompactThumbnailIds] = useState<string[]>([]);
   const [isCompactLayout, setIsCompactLayout] = useState(
@@ -229,6 +230,32 @@ export function EditorPage() {
       mediaQuery.removeListener(handleChange);
     };
   }, []);
+
+  useEffect(() => {
+    const pagePanelNode = pagePanelRef.current;
+    if (!pagePanelNode || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const updateWidth = (nextWidth?: number) => {
+      const measuredWidth = nextWidth ?? pagePanelNode.clientWidth;
+      const styles = window.getComputedStyle(pagePanelNode);
+      const horizontalPadding = Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight);
+      setPagePanelViewportWidth(Math.max(0, measuredWidth - horizontalPadding));
+    };
+
+    updateWidth();
+
+    const observer = new ResizeObserver((entries) => {
+      updateWidth(entries[0]?.contentRect.width);
+    });
+
+    observer.observe(pagePanelNode);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [bundle, isCompactLayout]);
 
   useEffect(() => {
     historyRef.current.clear();
@@ -1073,6 +1100,7 @@ export function EditorPage() {
                       palmSettings={palmSettings}
                       strokeWidth={strokeWidth}
                       tool={tool}
+                      viewportWidthHint={pagePanelViewportWidth}
                       zoom={zoom}
                     />
                   ) : (
@@ -1080,8 +1108,10 @@ export function EditorPage() {
                       <div
                         className="page-placeholder"
                         style={{
-                          width: `${page.width * zoom}px`,
-                          height: `${page.height * zoom}px`
+                          width: `${(pagePanelViewportWidth > 0 ? pagePanelViewportWidth : page.width) * zoom}px`,
+                          height: `${
+                            ((pagePanelViewportWidth > 0 ? pagePanelViewportWidth : page.width) / page.width) * page.height * zoom
+                          }px`
                         }}
                       >
                         <span>Page {page.position}</span>

@@ -195,6 +195,8 @@ a {
   border-radius: 32px;
   padding: 1rem;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .editor-page-indicator {

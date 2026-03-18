@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
 import type { Annotation, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
@@ -7,6 +7,7 @@ import { PdfPageLayer } from "./PdfPageLayer";
 interface EditorCanvasProps {
   page: PageRecord;
   fileUrl?: string;
+  viewportWidthHint?: number;
   zoom: number;
   tool: EditorTool;
   color: string;
@@ -56,6 +57,7 @@ function PagePaper({ template }: { template: PageRecord["template"] }) {
 export function EditorCanvas({
   page,
   fileUrl,
+  viewportWidthHint,
   zoom,
   tool,
   color,
@@ -68,7 +70,7 @@ export function EditorCanvas({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
-  const [availableWidth, setAvailableWidth] = useState(0);
+  const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
 
@@ -78,6 +80,14 @@ export function EditorCanvas({
   }, [page.id]);
 
   useEffect(() => {
+    if (!viewportWidthHint) {
+      return;
+    }
+
+    setAvailableWidth((current) => (Math.abs(current - viewportWidthHint) < 1 ? current : viewportWidthHint));
+  }, [viewportWidthHint]);
+
+  useLayoutEffect(() => {
     const shellNode = shellRef.current;
     if (!shellNode || typeof ResizeObserver === "undefined") {
       return;
