@@ -9,6 +9,8 @@ interface PdfPageLayerProps {
   zoom: number;
 }
 
+const MAX_RENDER_PIXELS = 3_200_000;
+
 export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,7 +38,10 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
         const pdf = await loadPdf(url);
         const page = await pdf.getPage(pageIndex + 1);
         const deviceScale = window.devicePixelRatio || 1;
-        const viewport = page.getViewport({ scale: zoom * deviceScale });
+        const requestedScale = zoom * deviceScale;
+        const maxScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(width * height, 1));
+        const effectiveScale = Math.min(requestedScale, maxScale);
+        const viewport = page.getViewport({ scale: effectiveScale });
 
         canvas.width = viewport.width;
         canvas.height = viewport.height;
@@ -48,6 +53,8 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
           canvasContext: context,
           viewport
         }).promise;
+
+        page.cleanup();
 
         if (!cancelled) {
           setError("");

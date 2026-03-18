@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import type { TouchEvent, WheelEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
@@ -10,7 +9,6 @@ import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
 const THUMBNAIL_PREVIEW_RADIUS = 8;
-const NAVIGATION_SWIPE_THRESHOLD = 56;
 
 function clampZoom(value: number): number {
   return Math.min(2.6, Math.max(0.45, Number(value.toFixed(2))));
@@ -25,8 +23,9 @@ export function EditorPage() {
   const navigate = useNavigate();
   const dirtyPagesRef = useRef(new Set<string>());
   const historyRef = useRef(new Map<string, { past: Annotation[][]; future: Annotation[][] }>());
-  const wheelNavigationRef = useRef({ lastAt: 0 });
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pagePanelRef = useRef<HTMLElement | null>(null);
+  const pageElementRefs = useRef(new Map<string, HTMLDivElement>());
+  const visibleRatiosRef = useRef(new Map<string, number>());
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -39,6 +38,7 @@ export function EditorPage() {
   const [insertTemplate, setInsertTemplate] = useState<PageTemplate>("ruled");
   const [saveState, setSaveState] = useState("All changes saved");
   const [titleDraft, setTitleDraft] = useState("");
+  const [visiblePageIds, setVisiblePageIds] = useState<string[]>([]);
   const [palmSettings, setPalmSettings] = useState<PalmSettings>({
     stylusOnly: true,
     maxTouchArea: 160
@@ -67,6 +67,8 @@ export function EditorPage() {
 
   useEffect(() => {
     historyRef.current.clear();
+    visibleRatiosRef.current.clear();
+    setVisiblePageIds([]);
   }, [documentId]);
 
   useEffect(() => {
@@ -177,6 +179,24 @@ export function EditorPage() {
     setPageAnnotations(activePageId, nextAnnotations);
   }
 
+  function setPageNode(pageId: string, node: HTMLDivElement | null): void {
+    if (node) {
+      pageElementRefs.current.set(pageId, node);
+      return;
+    }
+
+    pageElementRefs.current.delete(pageId);
+  }
+
+  function focusPage(pageId: string, behavior: ScrollBehavior = "smooth"): void {
+    setActivePageId(pageId);
+    pageElementRefs.current.get(pageId)?.scrollIntoView({
+      block: "center",
+      inline: "nearest",
+      behavior
+    });
+  }
+
   function goToRelativePage(direction: number): void {
     if (!bundle || !activePageId) {
       return;
@@ -189,7 +209,7 @@ export function EditorPage() {
 
     const nextPage = bundle.pages[currentIndex + direction];
     if (nextPage) {
-      setActivePageId(nextPage.id);
+      focusPage(nextPage.id);
     }
   }
 
@@ -291,6 +311,59 @@ export function EditorPage() {
   }, [activePageId]);
 
   useEffect(() => {
+    if (!bundle || !pagePanelRef.current) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const nextRatios = new Map(visibleRatiosRef.current);
+
+        entries.forEach((entry) => {
+          const pageId = (entry.target as HTMLElement).dataset.pageId;
+          if (!pageId) {
+            return;
+          }
+
+          if (entry.isIntersecting && entry.intersectionRatio > 0.08) {
+            nextRatios.set(pageId, entry.intersectionRatio);
+            return;
+          }
+
+          nextRatios.delete(pageId);
+        });
+
+        visibleRatiosRef.current = nextRatios;
+        const sortedVisibleIds = [...nextRatios.entries()]
+          .sort((left, right) => right[1] - left[1])
+          .map(([pageId]) => pageId);
+
+        setVisiblePageIds((current) => {
+          if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
+            return current;
+          }
+          return sortedVisibleIds;
+        });
+
+        const mostVisiblePageId = sortedVisibleIds[0];
+        if (mostVisiblePageId && mostVisiblePageId !== activePageId) {
+          setActivePageId(mostVisiblePageId);
+        }
+      },
+      {
+        root: pagePanelRef.current,
+        threshold: [0.08, 0.2, 0.45, 0.7, 0.9]
+      }
+    );
+
+    pageElementRefs.current.forEach((node) => observer.observe(node));
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [activePageId, bundle]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
       const target = event.target as HTMLElement | null;
       const isTypingTarget =
@@ -359,6 +432,7 @@ export function EditorPage() {
   const searchResults = searchQuery.trim()
     ? bundle.pages.filter((page) => getPageSearchText(page).toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : [];
+  const visiblePageIdSet = new Set(visiblePageIds);
   const previewWindow = new Set(
     activePage
       ? bundle.pages
@@ -366,57 +440,16 @@ export function EditorPage() {
           .map((page) => page.id)
       : []
   );
-
-  function handlePagePanelWheel(event: WheelEvent<HTMLElement>): void {
-    if (tool !== "hand" || zoom > 1.05) {
-      return;
-    }
-
-    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-    if (Math.abs(delta) < 32) {
-      return;
-    }
-
-    const now = Date.now();
-    if (now - wheelNavigationRef.current.lastAt < 220) {
-      return;
-    }
-
-    event.preventDefault();
-    wheelNavigationRef.current.lastAt = now;
-    goToRelativePage(delta > 0 ? 1 : -1);
-  }
-
-  function handleTouchStart(event: TouchEvent<HTMLElement>): void {
-    if (tool !== "hand" || zoom > 1.05) {
-      return;
-    }
-
-    const touch = event.changedTouches[0];
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-  }
-
-  function handleTouchEnd(event: TouchEvent<HTMLElement>): void {
-    if (tool !== "hand" || zoom > 1.05 || !touchStartRef.current) {
-      return;
-    }
-
-    const touch = event.changedTouches[0];
-    const deltaX = touch.clientX - touchStartRef.current.x;
-    const deltaY = touch.clientY - touchStartRef.current.y;
-    touchStartRef.current = null;
-
-    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < NAVIGATION_SWIPE_THRESHOLD) {
-      return;
-    }
-
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      goToRelativePage(deltaX < 0 ? 1 : -1);
-      return;
-    }
-
-    goToRelativePage(deltaY < 0 ? 1 : -1);
-  }
+  const renderedPageIdSet = new Set(
+    activePage
+      ? bundle.pages
+          .filter(
+            (page) =>
+              visiblePageIdSet.has(page.id) || Math.abs(page.position - activePage.position) <= 2
+          )
+          .map((page) => page.id)
+      : bundle.pages.slice(0, 3).map((page) => page.id)
+  );
 
   return (
     <main className="editor-layout">
@@ -513,14 +546,14 @@ export function EditorPage() {
               ? bundle.files.find((file) => file.id === page.sourceFileId)?.url
               : undefined;
 
-            return (
-              <button
-                className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
-                data-page-id={page.id}
-                key={page.id}
-                onClick={() => setActivePageId(page.id)}
-                type="button"
-              >
+              return (
+                <button
+                  className={`thumbnail-card ${activePage?.id === page.id ? "active" : ""}`}
+                  data-page-id={page.id}
+                  key={page.id}
+                  onClick={() => focusPage(page.id)}
+                  type="button"
+                >
                 <div className={`thumbnail-preview preview-${page.kind} preview-${page.template ?? "blank"}`}>
                   {page.kind === "pdf" && thumbnailFileUrl ? (
                     previewWindow.has(page.id) ? (
@@ -543,19 +576,49 @@ export function EditorPage() {
           })}
         </aside>
 
-        <section className="page-panel" onTouchEnd={handleTouchEnd} onTouchStart={handleTouchStart} onWheel={handlePagePanelWheel}>
-          {activePage ? (
-            <EditorCanvas
-              color={inkColor}
-              fileUrl={activeFile?.url}
-              onChange={updateAnnotations}
-              page={activePage}
-              palmSettings={palmSettings}
-              strokeWidth={strokeWidth}
-              tool={tool}
-              zoom={zoom}
-            />
-          ) : null}
+        <section className="page-panel" ref={pagePanelRef}>
+          <div className="page-stack">
+            {bundle.pages.map((page) => {
+              const pageFileUrl = page.sourceFileId
+                ? bundle.files.find((file) => file.id === page.sourceFileId)?.url
+                : undefined;
+              const shouldRenderPage = renderedPageIdSet.has(page.id);
+
+              return (
+                <div
+                  className={`page-stack-item ${activePage?.id === page.id ? "active" : ""}`}
+                  data-page-id={page.id}
+                  key={page.id}
+                  ref={(node) => setPageNode(page.id, node)}
+                >
+                  {shouldRenderPage ? (
+                    <EditorCanvas
+                      color={inkColor}
+                      fileUrl={pageFileUrl}
+                      onChange={(nextAnnotations) => setPageAnnotations(page.id, nextAnnotations)}
+                      page={page}
+                      palmSettings={palmSettings}
+                      strokeWidth={strokeWidth}
+                      tool={tool}
+                      zoom={zoom}
+                    />
+                  ) : (
+                    <div className="page-stage-shell">
+                      <div
+                        className="page-placeholder"
+                        style={{
+                          width: `${page.width * zoom}px`,
+                          height: `${page.height * zoom}px`
+                        }}
+                      >
+                        <span>Page {page.position}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </section>
 
         <aside className="inspector-panel">
@@ -613,7 +676,7 @@ export function EditorPage() {
             <p className="muted-copy">
               On iPad browsers this works best with Apple Pencil because the editor can ignore touch input and accept pen input only.
             </p>
-            <p className="muted-copy">Switch to Hand mode to swipe between pages. Arrow keys and Page Up/Page Down also navigate.</p>
+            <p className="muted-copy">Switch to Hand mode to scroll through the document. Arrow keys and Page Up/Page Down also navigate.</p>
           </section>
 
           <section className="inspector-card">
