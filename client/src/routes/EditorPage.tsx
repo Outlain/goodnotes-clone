@@ -149,6 +149,7 @@ export function EditorPage() {
   const { documentId = "" } = useParams();
   const navigate = useNavigate();
   const dirtyPagesRef = useRef(new Set<string>());
+  const bundleRef = useRef<DocumentBundle | null>(null);
   const historyRef = useRef(new Map<string, { past: Annotation[][]; future: Annotation[][] }>());
   const pagePanelRef = useRef<HTMLElement | null>(null);
   const pageElementRefs = useRef(new Map<string, HTMLDivElement>());
@@ -156,6 +157,9 @@ export function EditorPage() {
   const compactThumbnailRailRef = useRef<HTMLDivElement | null>(null);
   const visibleRatiosRef = useRef(new Map<string, number>());
   const activePageIdRef = useRef("");
+  const saveTimerRef = useRef<number | null>(null);
+  const saveInFlightRef = useRef(false);
+  const saveAgainRef = useRef(false);
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -180,6 +184,71 @@ export function EditorPage() {
     stylusOnly: true,
     maxTouchArea: 160
   });
+  const pageStructureKey = bundle
+    ? bundle.pages
+        .map(
+          (page) =>
+            `${page.id}:${page.position}:${page.kind}:${page.sourceFileId ?? ""}:${page.sourcePageIndex ?? ""}:${page.template ?? ""}`
+        )
+        .join("|")
+    : "";
+  const fileStructureKey = bundle ? bundle.files.map((file) => `${file.id}:${file.url}`).join("|") : "";
+
+  function clearSaveTimer(): void {
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }
+
+  async function flushDirtyPages(): Promise<void> {
+    const currentBundle = bundleRef.current;
+    if (!currentBundle || dirtyPagesRef.current.size === 0) {
+      return;
+    }
+
+    if (saveInFlightRef.current) {
+      saveAgainRef.current = true;
+      return;
+    }
+
+    saveInFlightRef.current = true;
+    const pageIds = [...dirtyPagesRef.current];
+    dirtyPagesRef.current.clear();
+
+    try {
+      for (const pageId of pageIds) {
+        const page = currentBundle.pages.find((entry) => entry.id === pageId);
+        if (!page) {
+          continue;
+        }
+
+        await api.saveAnnotations(page.id, page.annotations, collectAnnotationText(page.annotations));
+      }
+
+      if (dirtyPagesRef.current.size === 0) {
+        setSaveState("All changes saved");
+      }
+    } catch (nextError) {
+      pageIds.forEach((pageId) => dirtyPagesRef.current.add(pageId));
+      setError(nextError instanceof Error ? nextError.message : "Could not save annotations.");
+      setSaveState("Save failed");
+    } finally {
+      saveInFlightRef.current = false;
+      if (dirtyPagesRef.current.size > 0 || saveAgainRef.current) {
+        saveAgainRef.current = false;
+        scheduleSave(250);
+      }
+    }
+  }
+
+  function scheduleSave(delay = 700): void {
+    clearSaveTimer();
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void flushDirtyPages();
+    }, delay);
+  }
 
   async function loadDocument(): Promise<void> {
     setLoading(true);
@@ -199,7 +268,14 @@ export function EditorPage() {
   }
 
   useEffect(() => {
+    bundleRef.current = bundle;
+  }, [bundle]);
+
+  useEffect(() => {
     loadDocument();
+    return () => {
+      clearSaveTimer();
+    };
   }, [documentId]);
 
   useEffect(() => {
@@ -255,7 +331,7 @@ export function EditorPage() {
     return () => {
       observer.disconnect();
     };
-  }, [bundle, isCompactLayout]);
+  }, [documentId, isCompactLayout]);
 
   useEffect(() => {
     historyRef.current.clear();
@@ -274,36 +350,6 @@ export function EditorPage() {
       setCompactPagesOpen(false);
     }
   }, [isCompactLayout]);
-
-  useEffect(() => {
-    if (!bundle || dirtyPagesRef.current.size === 0) {
-      return;
-    }
-
-    const timer = window.setTimeout(async () => {
-      const pageIds = [...dirtyPagesRef.current];
-      dirtyPagesRef.current.clear();
-
-      try {
-        for (const pageId of pageIds) {
-          const page = bundle.pages.find((entry) => entry.id === pageId);
-          if (!page) {
-            continue;
-          }
-
-          await api.saveAnnotations(page.id, page.annotations, collectAnnotationText(page.annotations));
-        }
-        setSaveState("All changes saved");
-      } catch (nextError) {
-        setError(nextError instanceof Error ? nextError.message : "Could not save annotations.");
-        setSaveState("Save failed");
-      }
-    }, 700);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [bundle]);
 
   async function commitTitle() {
     if (!bundle) {
@@ -373,6 +419,7 @@ export function EditorPage() {
 
     dirtyPagesRef.current.add(pageId);
     setSaveState("Saving...");
+    scheduleSave();
   }
 
   function setPageNode(pageId: string, node: HTMLDivElement | null): void {
@@ -576,7 +623,7 @@ export function EditorPage() {
       }
       observer.disconnect();
     };
-  }, [bundle, compactPagesOpen, isCompactLayout]);
+  }, [compactPagesOpen, isCompactLayout, pageStructureKey]);
 
   useEffect(() => {
     if (!bundle || !pagePanelRef.current) {
@@ -641,7 +688,7 @@ export function EditorPage() {
       }
       observer.disconnect();
     };
-  }, [bundle]);
+  }, [documentId, pageStructureKey]);
 
   useEffect(() => {
     if (!bundle) {
@@ -667,7 +714,7 @@ export function EditorPage() {
         // Best-effort warm cache only.
       });
     });
-  }, [activePageId, bundle]);
+  }, [activePageId, fileStructureKey, pageStructureKey]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {

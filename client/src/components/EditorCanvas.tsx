@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
 import type { Annotation, AnnotationPoint, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
@@ -75,7 +75,7 @@ function shouldCaptureEditorGesture(
   return tool !== "hand" && !shouldIgnorePointer(event, palmSettings);
 }
 
-export function EditorCanvas({
+function EditorCanvasInner({
   page,
   fileUrl,
   viewportWidthHint,
@@ -617,3 +617,17 @@ export function EditorCanvas({
     </div>
   );
 }
+
+export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) => {
+  return (
+    previousProps.page === nextProps.page &&
+    previousProps.fileUrl === nextProps.fileUrl &&
+    previousProps.viewportWidthHint === nextProps.viewportWidthHint &&
+    previousProps.zoom === nextProps.zoom &&
+    previousProps.tool === nextProps.tool &&
+    previousProps.color === nextProps.color &&
+    previousProps.strokeWidth === nextProps.strokeWidth &&
+    previousProps.palmSettings.stylusOnly === nextProps.palmSettings.stylusOnly &&
+    previousProps.palmSettings.maxTouchArea === nextProps.palmSettings.maxTouchArea
+  );
+});

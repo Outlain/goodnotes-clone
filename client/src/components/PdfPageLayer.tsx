@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { getCachedPageSnapshot, loadPdfPage, storePageSnapshot } from "../lib/pdf";
 
 interface PdfPageLayerProps {
@@ -11,7 +11,7 @@ interface PdfPageLayerProps {
 
 const MAX_RENDER_PIXELS = 3_200_000;
 
-export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
+function PdfPageLayerInner({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -142,3 +142,5 @@ export function PdfPageLayer({ pageIndex, url, width, height, zoom }: PdfPageLay
     </>
   );
 }
+
+export const PdfPageLayer = memo(PdfPageLayerInner);

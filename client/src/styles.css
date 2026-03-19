@@ -1030,10 +1030,12 @@ a {
     box-shadow: 0 24px 48px rgba(11, 18, 27, 0.3);
   }
 
-  .compact-tool-dock .save-pill {
-    background: rgba(255, 255, 255, 0.09);
-    color: #f8f3eb;
-  }
+.compact-tool-dock .save-pill {
+  background: rgba(255, 255, 255, 0.09);
+  color: #f8f3eb;
+  min-width: 5.75rem;
+  text-align: center;
+}
 
   .compact-tool-dock .color-button.active {
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.28);

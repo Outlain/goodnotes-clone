@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { getCachedThumbnailSnapshot, loadPdfPage, storeThumbnailSnapshot } from "../lib/pdf";
 
 interface PdfThumbnailProps {
@@ -8,7 +8,7 @@ interface PdfThumbnailProps {
   height: number;
 }
 
-export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProps) {
+function PdfThumbnailInner({ pageIndex, url, width, height }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [error, setError] = useState("");
@@ -126,3 +126,5 @@ export function PdfThumbnail({ pageIndex, url, width, height }: PdfThumbnailProp
     </>
   );
 }
+
+export const PdfThumbnail = memo(PdfThumbnailInner);
