@@ -13,6 +13,7 @@ import {
   getPageDocumentId,
   getStoredFile,
   insertBlankPage,
+  insertPdfPages,
   renameDocument,
   toPublicDocumentBundle,
   appendPageAnnotations,
@@ -63,6 +64,30 @@ const upload = multer({
     fileSize: 1024 * 1024 * 100
   }
 });
+
+/** Parse a human-friendly page range like "2-4" or "1,3,5-7" into 0-based indices. */
+function parsePageRange(raw: string, totalPages: number): number[] {
+  const indices = new Set<number>();
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+  for (const part of parts) {
+    const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const start = Math.max(1, Number(rangeMatch[1]));
+      const end = Math.min(totalPages, Number(rangeMatch[2]));
+      for (let i = start; i <= end; i++) {
+        indices.add(i - 1); // 0-based
+      }
+    } else {
+      const num = Number(part);
+      if (Number.isInteger(num) && num >= 1 && num <= totalPages) {
+        indices.add(num - 1);
+      }
+    }
+  }
+
+  return [...indices].sort((a, b) => a - b);
+}
 
 function safeDocumentTitle(source: string): string {
   const trimmed = source.trim();
@@ -185,6 +210,66 @@ libraryRouter.post("/documents/:documentId/pages/insert", (request, response) =>
   broadcastDocumentChanged(documentId, senderId);
   response.status(201).json(result);
 });
+
+libraryRouter.post(
+  "/documents/:documentId/pages/insert-pdf",
+  upload.single("file"),
+  asyncRoute(async (request, response) => {
+    if (!request.file) {
+      response.status(400).json({ message: "Upload a PDF file to insert pages from." });
+      return;
+    }
+
+    const documentId = String(request.params.documentId);
+    const senderId = String(request.headers["x-sync-client-id"] ?? "");
+    const anchorPageId = typeof request.body.anchorPageId === "string" && request.body.anchorPageId.trim()
+      ? request.body.anchorPageId.trim()
+      : undefined;
+    const placement = request.body.placement === "before" ? "before" : "after";
+
+    // Parse page range — e.g. "2-4" → [1,2,3] (0-indexed), or "3" → [2]
+    const pageRangeRaw = typeof request.body.pageRange === "string" ? request.body.pageRange.trim() : "";
+
+    const persisted = await persistUploadedPdf(request.file.path);
+
+    try {
+      const inspected = await inspectPdf(persisted.absolutePath);
+
+      // Determine which page indices to insert
+      let pageIndices: number[];
+      if (!pageRangeRaw) {
+        // No range specified — insert all pages
+        pageIndices = inspected.pages.map((_, index) => index);
+      } else {
+        pageIndices = parsePageRange(pageRangeRaw, inspected.pageCount);
+      }
+
+      if (pageIndices.length === 0) {
+        response.status(400).json({ message: "No valid pages in the specified range." });
+        return;
+      }
+
+      const result = toPublicDocumentBundle(
+        insertPdfPages({
+          documentId,
+          anchorPageId,
+          placement,
+          fileStorageKey: persisted.storageKey,
+          originalName: request.file.originalname,
+          mimeType: request.file.mimetype || "application/pdf",
+          fileSize: request.file.size,
+          pages: inspected.pages,
+          pageIndices
+        })
+      );
+      broadcastDocumentChanged(documentId, senderId);
+      response.status(201).json(result);
+    } catch (error) {
+      await unlink(persisted.absolutePath).catch(() => undefined);
+      throw error;
+    }
+  })
+);
 
 libraryRouter.delete("/pages/:pageId", (request, response) => {
   const pageId = String(request.params.pageId);

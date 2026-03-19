@@ -73,6 +73,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  insertPdfPages: (documentId: string, payload: { file: File; anchorPageId?: string; placement: "before" | "after"; pageRange: string }) => {
+    const formData = new FormData();
+    formData.append("file", payload.file);
+    if (payload.anchorPageId) {
+      formData.append("anchorPageId", payload.anchorPageId);
+    }
+    formData.append("placement", payload.placement);
+    formData.append("pageRange", payload.pageRange);
+
+    return request<DocumentBundle>(`/api/documents/${documentId}/pages/insert-pdf`, {
+      method: "POST",
+      body: formData
+    });
+  },
   deletePage: (pageId: string) =>
     request<DocumentBundle>(`/api/pages/${pageId}`, {
       method: "DELETE"

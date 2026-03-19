@@ -205,6 +205,12 @@ export function EditorPage() {
   );
   const [compactPagesOpen, setCompactPagesOpen] = useState(false);
   const [compactActionsOpen, setCompactActionsOpen] = useState(false);
+  const [pdfInsertOpen, setPdfInsertOpen] = useState(false);
+  const [pdfInsertPlacement, setPdfInsertPlacement] = useState<"before" | "after">("after");
+  const [pdfInsertPageRange, setPdfInsertPageRange] = useState("");
+  const [pdfInsertFile, setPdfInsertFile] = useState<File | null>(null);
+  const [pdfInsertBusy, setPdfInsertBusy] = useState(false);
+  const pdfFileInputRef = useRef<HTMLInputElement | null>(null);
   const [palmSettings, setPalmSettings] = useState<PalmSettings>({
     stylusOnly: true,
     maxTouchArea: 160
@@ -912,6 +918,46 @@ export function EditorPage() {
     }
   }
 
+  function openPdfInsert(placement: "before" | "after"): void {
+    setPdfInsertPlacement(placement);
+    setPdfInsertPageRange("");
+    setPdfInsertFile(null);
+    setPdfInsertOpen(true);
+  }
+
+  async function submitPdfInsert(): Promise<void> {
+    if (!bundle || !activePageId || !pdfInsertFile) {
+      return;
+    }
+
+    setPdfInsertBusy(true);
+    const previousIds = new Set(bundle.pages.map((page) => page.id));
+    try {
+      const nextBundle = await api.insertPdfPages(bundle.document.id, {
+        file: pdfInsertFile,
+        anchorPageId: activePageId,
+        placement: pdfInsertPlacement,
+        pageRange: pdfInsertPageRange
+      });
+      const firstInserted = nextBundle.pages.find((page) => !previousIds.has(page.id));
+      setBundle(nextBundle);
+      bundleRef.current = nextBundle;
+      syncedPageStateRef.current = new Map(
+        nextBundle.pages.map((page) => [
+          page.id,
+          { annotations: page.annotations, annotationText: page.annotationText }
+        ])
+      );
+      setActivePageId(firstInserted?.id ?? activePageId);
+      setPdfInsertOpen(false);
+      setCompactActionsOpen(false);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not insert PDF pages.");
+    } finally {
+      setPdfInsertBusy(false);
+    }
+  }
+
   async function deleteCurrentPage() {
     if (!bundle || !activePageId) {
       return;
@@ -1234,6 +1280,67 @@ export function EditorPage() {
         <button className="secondary-button" onClick={() => insertBlankPage("after")} type="button">
           Insert blank page after
         </button>
+      </div>
+
+      <p className="eyebrow" style={{ marginTop: 16 }}>Insert from PDF</p>
+      <div className="stack-form">
+        <button className="secondary-button" onClick={() => openPdfInsert("before")} type="button">
+          Insert PDF pages before
+        </button>
+        <button className="secondary-button" onClick={() => openPdfInsert("after")} type="button">
+          Insert PDF pages after
+        </button>
+      </div>
+
+      {pdfInsertOpen && (
+        <div className="pdf-insert-dialog">
+          <p className="eyebrow">
+            Insert {pdfInsertPlacement === "before" ? "before" : "after"} current page
+          </p>
+          <div className="stack-form">
+            <input
+              ref={pdfFileInputRef}
+              accept="application/pdf"
+              className="app-input"
+              type="file"
+              onChange={(event) => setPdfInsertFile(event.target.files?.[0] ?? null)}
+            />
+            <label className="stack-form" style={{ gap: 4 }}>
+              <span className="muted-copy">
+                Page range <span style={{ opacity: 0.6 }}>(e.g. 1-3 or 2,5,8-10 — blank for all)</span>
+              </span>
+              <input
+                className="app-input"
+                placeholder="All pages"
+                type="text"
+                value={pdfInsertPageRange}
+                onChange={(event) => setPdfInsertPageRange(event.target.value)}
+              />
+            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                className="primary-button"
+                disabled={!pdfInsertFile || pdfInsertBusy}
+                style={{ flex: 1 }}
+                type="button"
+                onClick={submitPdfInsert}
+              >
+                {pdfInsertBusy ? "Inserting..." : "Insert"}
+              </button>
+              <button
+                className="ghost-button"
+                disabled={pdfInsertBusy}
+                type="button"
+                onClick={() => setPdfInsertOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="stack-form" style={{ marginTop: 16 }}>
         <button className="ghost-button danger-button" onClick={deleteCurrentPage} type="button">
           Delete current page
         </button>

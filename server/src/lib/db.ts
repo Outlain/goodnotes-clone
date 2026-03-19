@@ -580,15 +580,151 @@ export function deletePage(pageId: string): DocumentBundle {
 
   const transaction = db.transaction(() => {
     db.prepare("DELETE FROM pages WHERE id = ?").run(pageId);
-    db.prepare("UPDATE pages SET position = position - 1 WHERE document_id = ? AND position > ?").run(
+
+    // SQLite checks the UNIQUE(document_id, position) constraint row-by-row
+    // during UPDATE, so a simple `position - 1` can collide if rows are
+    // processed in descending order.  Use the same temporary-shift strategy
+    // as insertBlankPage to avoid this.
+    const lastPage = db
+      .prepare("SELECT position FROM pages WHERE document_id = ? ORDER BY position DESC LIMIT 1")
+      .get(pageRow.document_id) as { position: number } | undefined;
+    const highestPosition = lastPage?.position ?? 0;
+    const temporaryShift = highestPosition + 2;
+
+    db.prepare("UPDATE pages SET position = position + ? WHERE document_id = ? AND position > ?").run(
+      temporaryShift,
       pageRow.document_id,
       pageRow.position
     );
+    db.prepare("UPDATE pages SET position = position - ? WHERE document_id = ? AND position > ?").run(
+      temporaryShift + 1,
+      pageRow.document_id,
+      pageRow.position
+    );
+
     updateDocumentMetadata(pageRow.document_id);
   });
 
   transaction();
   return getDocumentBundle(pageRow.document_id);
+}
+
+export function insertPdfPages(options: {
+  documentId: string;
+  anchorPageId?: string;
+  placement: "before" | "after";
+  fileStorageKey: string;
+  originalName: string;
+  mimeType: string;
+  fileSize: number;
+  pages: ImportedPdfPage[];
+  pageIndices: number[];
+}): DocumentBundle {
+  const documentRow = getDocumentRow(options.documentId);
+  if (!documentRow) {
+    throw new HttpError(404, "Document not found.");
+  }
+
+  if (options.pageIndices.length === 0) {
+    throw new HttpError(400, "At least one page must be selected.");
+  }
+
+  const transaction = db.transaction(() => {
+    const anchorRow = options.anchorPageId
+      ? (db
+          .prepare("SELECT * FROM pages WHERE id = ? AND document_id = ?")
+          .get(options.anchorPageId, options.documentId) as PageRow | undefined)
+      : undefined;
+
+    const lastPage = db
+      .prepare("SELECT * FROM pages WHERE document_id = ? ORDER BY position DESC LIMIT 1")
+      .get(options.documentId) as PageRow | undefined;
+
+    const startPosition = anchorRow
+      ? options.placement === "before"
+        ? anchorRow.position
+        : anchorRow.position + 1
+      : (lastPage?.position ?? 0) + 1;
+    const highestPosition = lastPage?.position ?? 0;
+    const insertCount = options.pageIndices.length;
+
+    // Shift existing pages out of the way using the temporary-shift strategy
+    const temporaryShift = highestPosition + insertCount + 2;
+    if (startPosition <= highestPosition) {
+      db.prepare("UPDATE pages SET position = position + ? WHERE document_id = ? AND position >= ?").run(
+        temporaryShift,
+        options.documentId,
+        startPosition
+      );
+    }
+
+    // Store the uploaded PDF as a file record
+    const timestamp = now();
+    const fileId = nanoid();
+    db.prepare(
+      `
+        INSERT INTO files (id, document_id, storage_key, original_name, mime_type, size, page_count, created_at)
+        VALUES (@id, @documentId, @storageKey, @originalName, @mimeType, @size, @pageCount, @createdAt)
+      `
+    ).run({
+      id: fileId,
+      documentId: options.documentId,
+      storageKey: options.fileStorageKey,
+      originalName: options.originalName,
+      mimeType: options.mimeType,
+      size: options.fileSize,
+      pageCount: options.pages.length,
+      createdAt: timestamp
+    });
+
+    // Insert the selected PDF pages
+    const insertPage = db.prepare(
+      `
+        INSERT INTO pages (
+          id, document_id, position, kind, source_file_id, source_page_index,
+          template, width, height, annotations_json, base_text, annotation_text, created_at, updated_at
+        )
+        VALUES (
+          @id, @documentId, @position, 'pdf', @sourceFileId, @sourcePageIndex,
+          NULL, @width, @height, '[]', @baseText, '', @createdAt, @updatedAt
+        )
+      `
+    );
+
+    options.pageIndices.forEach((sourcePageIndex, insertIndex) => {
+      const pdfPage = options.pages[sourcePageIndex];
+      if (!pdfPage) {
+        return;
+      }
+
+      insertPage.run({
+        id: nanoid(),
+        documentId: options.documentId,
+        position: startPosition + insertIndex,
+        sourceFileId: fileId,
+        sourcePageIndex,
+        width: pdfPage.width,
+        height: pdfPage.height,
+        baseText: pdfPage.text,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    });
+
+    // Normalize shifted pages back to consecutive positions
+    if (startPosition <= highestPosition) {
+      db.prepare("UPDATE pages SET position = position - ? WHERE document_id = ? AND position >= ?").run(
+        temporaryShift - insertCount,
+        options.documentId,
+        startPosition + temporaryShift
+      );
+    }
+
+    updateDocumentMetadata(options.documentId);
+  });
+
+  transaction();
+  return getDocumentBundle(options.documentId);
 }
 
 export function getPageDocumentId(pageId: string): string | null {

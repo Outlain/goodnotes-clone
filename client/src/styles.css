@@ -1246,3 +1246,35 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── PDF insert dialog ─────────────────────── */
+
+.pdf-insert-dialog {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.pdf-insert-dialog .eyebrow {
+  margin-bottom: 8px;
+}
+
+.pdf-insert-dialog input[type="file"] {
+  font-size: 0.82rem;
+  padding: 6px;
+}
+
+.compact-tool-scroll .pdf-insert-dialog {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.compact-tool-scroll .pdf-insert-dialog .muted-copy {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.compact-tool-scroll .pdf-insert-dialog input[type="file"] {
+  color: rgba(255, 255, 255, 0.85);
+}
