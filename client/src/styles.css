@@ -1247,6 +1247,124 @@ a {
   }
 }
 
+/* ── Delete buttons & confirm dialog ───────── */
+
+.document-card-wrapper {
+  position: relative;
+}
+
+.document-card-wrapper .document-card {
+  width: 100%;
+}
+
+.delete-item-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 2;
+}
+
+.document-card-wrapper:hover .delete-item-button {
+  opacity: 1;
+}
+
+.delete-item-button:hover {
+  background: rgba(180, 40, 30, 0.85);
+}
+
+.folder-chip-wrapper {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+
+.folder-chip-wrapper .folder-chip {
+  padding-right: 1.8rem;
+}
+
+.delete-folder-button {
+  position: absolute;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.12);
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.folder-chip-wrapper:hover .delete-folder-button {
+  opacity: 1;
+}
+
+.delete-folder-button:hover {
+  background: rgba(180, 40, 30, 0.75);
+  color: #fff;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 9999;
+  padding: 1rem;
+}
+
+.confirm-dialog {
+  background: var(--panel-strong);
+  border-radius: 18px;
+  padding: 1.5rem;
+  max-width: 380px;
+  width: 100%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.confirm-dialog h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.confirm-dialog p {
+  margin: 0 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.confirm-actions .danger-button {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+}
+
+.confirm-actions .danger-button:hover {
+  background: #a93226;
+}
+
 /* ── PDF insert dialog ─────────────────────── */
 
 .pdf-insert-dialog {

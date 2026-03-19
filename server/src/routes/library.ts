@@ -7,8 +7,11 @@ import {
   createFolder,
   createImportedPdfDocument,
   createNoteDocument,
+  deleteDocument,
+  deleteFolder,
   deletePage,
   getDocumentBundle,
+  getDocumentFileStorageKeys,
   getLibraryPayload,
   getPageDocumentId,
   getStoredFile,
@@ -188,6 +191,30 @@ libraryRouter.patch("/documents/:documentId", (request, response) => {
 
   const documentId = String(request.params.documentId);
   response.json(toPublicDocumentBundle(renameDocument(documentId, parsed.data.title)));
+});
+
+libraryRouter.delete(
+  "/documents/:documentId",
+  asyncRoute(async (request, response) => {
+    const documentId = String(request.params.documentId);
+
+    // Collect file storage keys before deleting so we can clean up uploaded PDFs.
+    const storageKeys = getDocumentFileStorageKeys(documentId);
+    deleteDocument(documentId);
+
+    // Best-effort file cleanup — don't fail the response if disk delete fails.
+    for (const key of storageKeys) {
+      await unlink(getUploadPath(key)).catch(() => undefined);
+    }
+
+    response.json({ success: true });
+  })
+);
+
+libraryRouter.delete("/folders/:folderId", (request, response) => {
+  const folderId = String(request.params.folderId);
+  deleteFolder(folderId);
+  response.json({ success: true });
 });
 
 libraryRouter.post("/documents/:documentId/pages/insert", (request, response) => {

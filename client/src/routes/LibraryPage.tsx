@@ -28,6 +28,30 @@ export function LibraryPage() {
   const [newFolderTitle, setNewFolderTitle] = useState("");
   const [newFolderColor, setNewFolderColor] = useState(folderColors[0]);
   const [importFolderId, setImportFolderId] = useState<string>("root");
+  const [confirmDelete, setConfirmDelete] = useState<{ type: "document" | "folder"; id: string; title: string } | null>(null);
+
+  async function handleDeleteDocument(documentId: string): Promise<void> {
+    try {
+      await api.deleteDocument(documentId);
+      setConfirmDelete(null);
+      await refresh();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not delete document.");
+    }
+  }
+
+  async function handleDeleteFolder(folderId: string): Promise<void> {
+    try {
+      await api.deleteFolder(folderId);
+      setConfirmDelete(null);
+      if (activeFolderId === folderId) {
+        setActiveFolderId("all");
+      }
+      await refresh();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not delete folder.");
+    }
+  }
 
   async function refresh(): Promise<void> {
     setLoading(true);
@@ -179,15 +203,27 @@ export function LibraryPage() {
               Loose papers
             </button>
             {(library?.folders ?? []).map((folder) => (
-              <button
-                className={`folder-chip ${activeFolderId === folder.id ? "active" : ""}`}
-                key={folder.id}
-                onClick={() => setActiveFolderId(folder.id)}
-                style={{ borderColor: folder.color }}
-                type="button"
-              >
-                {folder.title}
-              </button>
+              <div className="folder-chip-wrapper" key={folder.id}>
+                <button
+                  className={`folder-chip ${activeFolderId === folder.id ? "active" : ""}`}
+                  onClick={() => setActiveFolderId(folder.id)}
+                  style={{ borderColor: folder.color }}
+                  type="button"
+                >
+                  {folder.title}
+                </button>
+                <button
+                  aria-label={`Delete ${folder.title} folder`}
+                  className="delete-folder-button"
+                  onClick={() => setConfirmDelete({ type: "folder", id: folder.id, title: folder.title })}
+                  title="Delete folder"
+                  type="button"
+                >
+                  <svg viewBox="0 0 24 24" width="12" height="12">
+                    <path d="M6 6 18 18M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              </div>
             ))}
           </div>
 
@@ -290,22 +326,34 @@ export function LibraryPage() {
 
         <section className="document-grid">
           {documents.map((document) => (
-            <button
-              className="document-card"
-              key={document.id}
-              onClick={() => navigate(`/documents/${document.id}`)}
-              style={{ "--card-color": document.coverColor } as CSSProperties}
-              type="button"
-            >
-              <div className="document-cover">
-                <span className="document-kind">{document.kind === "pdf" ? "Imported PDF" : "Notebook"}</span>
-                <strong>{document.title}</strong>
-              </div>
-              <div className="document-meta">
-                <span>{document.pageCount} pages</span>
-                <span>{document.folderId ? folderNameById.get(document.folderId) : "Loose papers"}</span>
-              </div>
-            </button>
+            <div className="document-card-wrapper" key={document.id}>
+              <button
+                className="document-card"
+                onClick={() => navigate(`/documents/${document.id}`)}
+                style={{ "--card-color": document.coverColor } as CSSProperties}
+                type="button"
+              >
+                <div className="document-cover">
+                  <span className="document-kind">{document.kind === "pdf" ? "Imported PDF" : "Notebook"}</span>
+                  <strong>{document.title}</strong>
+                </div>
+                <div className="document-meta">
+                  <span>{document.pageCount} pages</span>
+                  <span>{document.folderId ? folderNameById.get(document.folderId) : "Loose papers"}</span>
+                </div>
+              </button>
+              <button
+                aria-label={`Delete ${document.title}`}
+                className="delete-item-button"
+                onClick={() => setConfirmDelete({ type: "document", id: document.id, title: document.title })}
+                title="Delete"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16">
+                  <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            </div>
           ))}
         </section>
 
@@ -316,6 +364,39 @@ export function LibraryPage() {
           </section>
         ) : null}
       </section>
+
+      {confirmDelete ? (
+        <div className="confirm-overlay" onClick={() => setConfirmDelete(null)}>
+          <div className="confirm-dialog" onClick={(event) => event.stopPropagation()}>
+            <h3>Delete {confirmDelete.type === "folder" ? "folder" : "document"}?</h3>
+            <p>
+              {confirmDelete.type === "folder"
+                ? `The folder "${confirmDelete.title}" will be deleted. Documents inside it will be moved to Loose papers.`
+                : `"${confirmDelete.title}" will be permanently deleted. This cannot be undone.`}
+            </p>
+            <div className="confirm-actions">
+              <button
+                className="ghost-button"
+                onClick={() => setConfirmDelete(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button danger-button"
+                onClick={() =>
+                  confirmDelete.type === "folder"
+                    ? handleDeleteFolder(confirmDelete.id)
+                    : handleDeleteDocument(confirmDelete.id)
+                }
+                type="button"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

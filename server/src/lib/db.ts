@@ -487,6 +487,32 @@ export function renameDocument(documentId: string, title: string): DocumentBundl
   return getDocumentBundle(documentId);
 }
 
+export function deleteDocument(documentId: string): void {
+  const documentRow = getDocumentRow(documentId);
+  if (!documentRow) {
+    throw new HttpError(404, "Document not found.");
+  }
+
+  // CASCADE will remove files and pages rows.
+  db.prepare("DELETE FROM documents WHERE id = ?").run(documentId);
+}
+
+export function getDocumentFileStorageKeys(documentId: string): string[] {
+  const rows = db.prepare("SELECT storage_key FROM files WHERE document_id = ?").all(documentId) as { storage_key: string }[];
+  return rows.map((row) => row.storage_key);
+}
+
+export function deleteFolder(folderId: string): void {
+  const row = db.prepare("SELECT * FROM folders WHERE id = ?").get(folderId) as FolderRow | undefined;
+  if (!row) {
+    throw new HttpError(404, "Folder not found.");
+  }
+
+  // Nullify the folder reference on documents — don't delete the documents.
+  db.prepare("UPDATE documents SET folder_id = NULL WHERE folder_id = ?").run(folderId);
+  db.prepare("DELETE FROM folders WHERE id = ?").run(folderId);
+}
+
 export function insertBlankPage(options: {
   documentId: string;
   anchorPageId?: string;

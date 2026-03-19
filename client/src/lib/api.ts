@@ -62,6 +62,14 @@ export const api = {
       body: formData
     });
   },
+  deleteDocument: (documentId: string) =>
+    request<{ success: boolean }>(`/api/documents/${documentId}`, {
+      method: "DELETE"
+    }),
+  deleteFolder: (folderId: string) =>
+    request<{ success: boolean }>(`/api/folders/${folderId}`, {
+      method: "DELETE"
+    }),
   getDocument: (documentId: string) => request<DocumentBundle>(`/api/documents/${documentId}`),
   renameDocument: (documentId: string, title: string) =>
     request<DocumentBundle>(`/api/documents/${documentId}`, {

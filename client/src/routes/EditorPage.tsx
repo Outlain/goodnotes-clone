@@ -13,7 +13,7 @@ import type { Annotation, DocumentBundle, EditorTool, LineStyle, PageRecord, Pag
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
 const THUMBNAIL_PREVIEW_RADIUS = 3;
-const RENDER_AHEAD_RADIUS = 2;
+const RENDER_AHEAD_RADIUS = 3;
 const PREFETCH_RADIUS = 6;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 const LOCAL_DRAFT_DELAY_MS = 3000;
@@ -467,7 +467,12 @@ export function EditorPage() {
   }
 
   async function loadDocument(options?: { skipDrafts?: boolean }): Promise<void> {
-    setLoading(true);
+    // Only show the full loading screen on initial load (no existing bundle).
+    // For refreshes (WebSocket sync, visibility change), keep the current view
+    // alive so rendered PDF pages aren't unmounted and re-created from scratch.
+    if (!bundleRef.current) {
+      setLoading(true);
+    }
     try {
       const serverBundle = await api.getDocument(documentId);
       const skipDrafts = options?.skipDrafts ?? false;
@@ -897,6 +902,17 @@ export function EditorPage() {
     setPageAnnotations(activePageId, next, { recordHistory: false, bumpRevision: true });
   }
 
+  function applyBundleUpdate(nextBundle: DocumentBundle): void {
+    bundleRef.current = nextBundle;
+    syncedPageStateRef.current = new Map(
+      nextBundle.pages.map((page) => [
+        page.id,
+        { annotations: page.annotations, annotationText: page.annotationText }
+      ])
+    );
+    setBundle(nextBundle);
+  }
+
   async function insertBlankPage(placement: "before" | "after") {
     if (!bundle || !activePageId) {
       return;
@@ -910,7 +926,7 @@ export function EditorPage() {
         template: insertTemplate
       });
       const insertedPage = nextBundle.pages.find((page) => !previousIds.has(page.id));
-      setBundle(nextBundle);
+      applyBundleUpdate(nextBundle);
       setActivePageId(insertedPage?.id ?? activePageId);
       setCompactActionsOpen(false);
     } catch (nextError) {
@@ -940,14 +956,7 @@ export function EditorPage() {
         pageRange: pdfInsertPageRange
       });
       const firstInserted = nextBundle.pages.find((page) => !previousIds.has(page.id));
-      setBundle(nextBundle);
-      bundleRef.current = nextBundle;
-      syncedPageStateRef.current = new Map(
-        nextBundle.pages.map((page) => [
-          page.id,
-          { annotations: page.annotations, annotationText: page.annotationText }
-        ])
-      );
+      applyBundleUpdate(nextBundle);
       setActivePageId(firstInserted?.id ?? activePageId);
       setPdfInsertOpen(false);
       setCompactActionsOpen(false);
@@ -968,7 +977,7 @@ export function EditorPage() {
     try {
       const nextBundle = await api.deletePage(activePageId);
       const nextPage = nextBundle.pages[currentIndex] ?? nextBundle.pages[currentIndex - 1] ?? nextBundle.pages[0];
-      setBundle(nextBundle);
+      applyBundleUpdate(nextBundle);
       setActivePageId(nextPage?.id ?? "");
       setCompactActionsOpen(false);
     } catch (nextError) {
@@ -1068,7 +1077,12 @@ export function EditorPage() {
       const mostVisiblePageId = sortedVisibleIds[0];
       if (mostVisiblePageId && mostVisiblePageId !== activePageIdRef.current) {
         activePageIdRef.current = mostVisiblePageId;
-        setActivePageId(mostVisiblePageId);
+        // Use startTransition so the active-page change (which recalculates
+        // renderedPageIdSet) doesn't block the scroll thread and cause
+        // layout-shift-induced "snapping" on large documents.
+        startTransition(() => {
+          setActivePageId(mostVisiblePageId);
+        });
       }
     };
 
@@ -1734,12 +1748,23 @@ export function EditorPage() {
                     <div className="page-stage-shell">
                       <div
                         className="page-placeholder"
-                        style={{
-                          width: `${(pagePanelViewportWidth > 0 ? pagePanelViewportWidth : page.width) * zoom}px`,
-                          height: `${
-                            ((pagePanelViewportWidth > 0 ? pagePanelViewportWidth : page.width) / page.width) * page.height * zoom
-                          }px`
-                        }}
+                        style={(() => {
+                          // Match the sizing that EditorCanvas produces so that
+                          // switching between placeholder and rendered page
+                          // doesn't cause a height change (scroll jump).
+                          // EditorCanvas measures availableWidth from the shell
+                          // minus its horizontal padding (1rem = 16px each side).
+                          const shellPaddingPx = isCompactLayout ? 0 : 32;
+                          const effectiveWidth = pagePanelViewportWidth > 0
+                            ? pagePanelViewportWidth - shellPaddingPx
+                            : page.width;
+                          const fitScale = effectiveWidth / page.width;
+                          const renderZoom = Math.max(0.2, fitScale * zoom);
+                          return {
+                            width: `${page.width * renderZoom}px`,
+                            height: `${page.height * renderZoom}px`
+                          };
+                        })()}
                       >
                         <span>Page {page.position}</span>
                       </div>
