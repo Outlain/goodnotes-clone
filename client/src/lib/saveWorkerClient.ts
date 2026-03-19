@@ -61,12 +61,13 @@ function getWorker(): Worker | null {
 export async function saveAnnotationsInWorker(
   pageId: string,
   annotations: Annotation[],
-  annotationText: string
+  annotationText: string,
+  mode: "replace" | "append" = "replace"
 ): Promise<void> {
   const worker = getWorker();
   if (!worker) {
-    const response = await fetch(`/api/pages/${pageId}/annotations`, {
-      method: "PUT",
+    const response = await fetch(`/api/pages/${pageId}/annotations${mode === "append" ? "/append" : ""}`, {
+      method: mode === "append" ? "POST" : "PUT",
       credentials: "include",
       headers: {
         "Content-Type": "application/json"
@@ -95,6 +96,7 @@ export async function saveAnnotationsInWorker(
     worker.postMessage({
       type: "save",
       id: requestId,
+      mode,
       pageId,
       annotations,
       annotationText,

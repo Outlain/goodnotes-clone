@@ -3,6 +3,7 @@ import type { Annotation } from "../types";
 interface SaveRequestMessage {
   type: "save";
   id: string;
+  mode: "replace" | "append";
   pageId: string;
   annotations: Annotation[];
   annotationText: string;
@@ -36,11 +37,11 @@ self.addEventListener("message", async (event: MessageEvent<SaveRequestMessage>)
   }
 
   const startedAt = performance.now();
-  const { id, pageId, annotations, annotationText, debug } = event.data;
+  const { id, mode, pageId, annotations, annotationText, debug } = event.data;
 
   try {
-    const response = await fetch(`/api/pages/${pageId}/annotations`, {
-      method: "PUT",
+    const response = await fetch(`/api/pages/${pageId}/annotations${mode === "append" ? "/append" : ""}`, {
+      method: mode === "append" ? "POST" : "PUT",
       credentials: "include",
       headers: {
         "Content-Type": "application/json"
@@ -61,7 +62,7 @@ self.addEventListener("message", async (event: MessageEvent<SaveRequestMessage>)
 
     const durationMs = performance.now() - startedAt;
     if (debug) {
-      console.info("[Inkflow] Worker save complete", { pageId, durationMs, annotationCount: annotations.length });
+      console.info("[Inkflow] Worker save complete", { pageId, mode, durationMs, annotationCount: annotations.length });
     }
     postResult({
       type: "result",
@@ -74,6 +75,7 @@ self.addEventListener("message", async (event: MessageEvent<SaveRequestMessage>)
     if (debug) {
       console.error("[Inkflow] Worker save failed", {
         pageId,
+        mode,
         durationMs,
         error
       });

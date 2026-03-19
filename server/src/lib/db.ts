@@ -614,6 +614,35 @@ export function updatePageAnnotations(pageId: string, annotations: Annotation[],
   return mapPage(nextRow);
 }
 
+export function appendPageAnnotations(pageId: string, annotations: Annotation[], annotationText: string): PagePayload {
+  const pageRow = db.prepare("SELECT * FROM pages WHERE id = ?").get(pageId) as PageRow | undefined;
+  if (!pageRow) {
+    throw new HttpError(404, "Page not found.");
+  }
+
+  const currentAnnotations = parseAnnotations(pageRow.annotations_json);
+  const updatedAt = now();
+  const nextAnnotations = currentAnnotations.concat(annotations);
+
+  db.prepare(
+    `
+      UPDATE pages
+      SET annotations_json = @annotations, annotation_text = @annotationText, updated_at = @updatedAt
+      WHERE id = @pageId
+    `
+  ).run({
+    annotations: JSON.stringify(nextAnnotations),
+    annotationText,
+    updatedAt,
+    pageId
+  });
+
+  db.prepare("UPDATE documents SET updated_at = ? WHERE id = ?").run(updatedAt, pageRow.document_id);
+
+  const nextRow = db.prepare("SELECT * FROM pages WHERE id = ?").get(pageId) as PageRow;
+  return mapPage(nextRow);
+}
+
 export function getStoredFile(fileId: string): (FilePayload & { storageKey: string; documentId: string }) | undefined {
   const row = db.prepare("SELECT * FROM files WHERE id = ?").get(fileId) as FileRow | undefined;
   if (!row) {

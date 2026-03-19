@@ -14,6 +14,7 @@ import {
   insertBlankPage,
   renameDocument,
   toPublicDocumentBundle,
+  appendPageAnnotations,
   updatePageAnnotations
 } from "../lib/db.js";
 import { HttpError } from "../lib/http.js";
@@ -45,6 +46,11 @@ const insertPageSchema = z.object({
 });
 
 const saveAnnotationsSchema = z.object({
+  annotations: z.array(z.any()).max(5000),
+  annotationText: z.string().max(200000)
+});
+
+const appendAnnotationsSchema = z.object({
   annotations: z.array(z.any()).max(5000),
   annotationText: z.string().max(200000)
 });
@@ -188,6 +194,16 @@ libraryRouter.put("/pages/:pageId/annotations", (request, response) => {
   }
 
   response.json(updatePageAnnotations(String(request.params.pageId), parsed.data.annotations, parsed.data.annotationText));
+});
+
+libraryRouter.post("/pages/:pageId/annotations/append", (request, response) => {
+  const parsed = appendAnnotationsSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ message: "Invalid append-annotation payload." });
+    return;
+  }
+
+  response.json(appendPageAnnotations(String(request.params.pageId), parsed.data.annotations, parsed.data.annotationText));
 });
 
 libraryRouter.get(

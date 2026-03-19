@@ -168,6 +168,7 @@ export function EditorPage() {
   const saveAgainRef = useRef(false);
   const pendingDraftPagesRef = useRef(new Set<string>());
   const pendingPageStateRef = useRef(new Map<string, { annotations: Annotation[]; annotationText: string }>());
+  const syncedPageStateRef = useRef(new Map<string, { annotations: Annotation[]; annotationText: string }>());
   const lastEditAtRef = useRef(0);
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -354,15 +355,30 @@ export function EditorPage() {
           continue;
         }
 
+        const syncedPageState = syncedPageStateRef.current.get(page.id) ?? {
+          annotations: [],
+          annotationText: ""
+        };
+        const canAppend =
+          page.annotations.length >= syncedPageState.annotations.length &&
+          syncedPageState.annotations.every((annotation, index) => page.annotations[index] === annotation);
+        const nextAnnotations = canAppend ? page.annotations.slice(syncedPageState.annotations.length) : page.annotations;
+        const saveMode = canAppend && nextAnnotations.length > 0 ? "append" : "replace";
+
         const startedAt = performance.now();
-        await saveAnnotationsInWorker(page.id, page.annotations, page.annotationText);
+        await saveAnnotationsInWorker(page.id, nextAnnotations, page.annotationText, saveMode);
         if (debugEnabled) {
           console.info("[Inkflow] Save settled", {
             pageId: page.id,
+            mode: saveMode,
             durationMs: performance.now() - startedAt,
-            annotationCount: page.annotations.length
+            annotationCount: nextAnnotations.length
           });
         }
+        syncedPageStateRef.current.set(page.id, {
+          annotations: page.annotations,
+          annotationText: page.annotationText
+        });
       }
 
       await Promise.all(pageIds.map((pageId) => deleteDraft(currentBundle.document.id, pageId)));
@@ -402,6 +418,15 @@ export function EditorPage() {
       const serverBundle = await api.getDocument(documentId);
       const localDrafts = await getDraftsForDocument(documentId);
       pendingPageStateRef.current.clear();
+      syncedPageStateRef.current = new Map(
+        serverBundle.pages.map((page) => [
+          page.id,
+          {
+            annotations: page.annotations,
+            annotationText: page.annotationText
+          }
+        ])
+      );
       const nextBundle =
         localDrafts.size > 0
           ? {
