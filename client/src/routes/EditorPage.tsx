@@ -4,6 +4,7 @@ import { EditorCanvas } from "../components/EditorCanvas";
 import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
 import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
+import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
 import { loadPdfPage } from "../lib/pdf";
 import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings } from "../types";
 
@@ -13,6 +14,9 @@ const THUMBNAIL_PREVIEW_RADIUS = 3;
 const RENDER_AHEAD_RADIUS = 2;
 const PREFETCH_RADIUS = 6;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
+const LOCAL_DRAFT_DELAY_MS = 650;
+const REMOTE_SAVE_IDLE_MS = 2200;
+const REMOTE_SAVE_RETRY_MS = 1200;
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
   { value: "pen", label: "Pen", icon: "pen" },
@@ -158,8 +162,11 @@ export function EditorPage() {
   const visibleRatiosRef = useRef(new Map<string, number>());
   const activePageIdRef = useRef("");
   const saveTimerRef = useRef<number | null>(null);
+  const draftPersistTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const saveAgainRef = useRef(false);
+  const pendingDraftPagesRef = useRef(new Set<string>());
+  const lastEditAtRef = useRef(0);
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -201,6 +208,51 @@ export function EditorPage() {
     }
   }
 
+  function clearDraftPersistTimer(): void {
+    if (draftPersistTimerRef.current != null) {
+      window.clearTimeout(draftPersistTimerRef.current);
+      draftPersistTimerRef.current = null;
+    }
+  }
+
+  async function flushDraftPersistence(): Promise<void> {
+    const currentBundle = bundleRef.current;
+    if (!currentBundle || pendingDraftPagesRef.current.size === 0) {
+      return;
+    }
+
+    const pageIds = [...pendingDraftPagesRef.current];
+    pendingDraftPagesRef.current.clear();
+
+    try {
+      await Promise.all(
+        pageIds.map(async (pageId) => {
+          const page = currentBundle.pages.find((entry) => entry.id === pageId);
+          if (!page) {
+            return;
+          }
+
+          await saveDraft({
+            documentId: currentBundle.document.id,
+            pageId,
+            annotations: page.annotations,
+            annotationText: page.annotationText
+          });
+        })
+      );
+    } catch {
+      pageIds.forEach((pageId) => pendingDraftPagesRef.current.add(pageId));
+    }
+  }
+
+  function scheduleDraftPersistence(delay = LOCAL_DRAFT_DELAY_MS): void {
+    clearDraftPersistTimer();
+    draftPersistTimerRef.current = window.setTimeout(() => {
+      draftPersistTimerRef.current = null;
+      void flushDraftPersistence();
+    }, delay);
+  }
+
   async function flushDirtyPages(): Promise<void> {
     const currentBundle = bundleRef.current;
     if (!currentBundle || dirtyPagesRef.current.size === 0) {
@@ -212,19 +264,31 @@ export function EditorPage() {
       return;
     }
 
+    const msSinceLastEdit = performance.now() - lastEditAtRef.current;
+    if (msSinceLastEdit < REMOTE_SAVE_IDLE_MS) {
+      scheduleSave(Math.max(REMOTE_SAVE_IDLE_MS - msSinceLastEdit, 250));
+      return;
+    }
+
     saveInFlightRef.current = true;
     const pageIds = [...dirtyPagesRef.current];
     dirtyPagesRef.current.clear();
 
     try {
+      startTransition(() => {
+        setSaveState("Syncing...");
+      });
+
       for (const pageId of pageIds) {
         const page = currentBundle.pages.find((entry) => entry.id === pageId);
         if (!page) {
           continue;
         }
 
-        await api.saveAnnotations(page.id, page.annotations, collectAnnotationText(page.annotations));
+        await api.saveAnnotations(page.id, page.annotations, page.annotationText);
       }
+
+      await Promise.all(pageIds.map((pageId) => deleteDraft(currentBundle.document.id, pageId)));
 
       if (dirtyPagesRef.current.size === 0) {
         startTransition(() => {
@@ -235,18 +299,19 @@ export function EditorPage() {
       pageIds.forEach((pageId) => dirtyPagesRef.current.add(pageId));
       setError(nextError instanceof Error ? nextError.message : "Could not save annotations.");
       startTransition(() => {
-        setSaveState("Save failed");
+        setSaveState("Saved locally");
       });
     } finally {
       saveInFlightRef.current = false;
       if (dirtyPagesRef.current.size > 0 || saveAgainRef.current) {
         saveAgainRef.current = false;
-        scheduleSave(250);
+        const nextDelay = Math.max(REMOTE_SAVE_IDLE_MS - (performance.now() - lastEditAtRef.current), REMOTE_SAVE_RETRY_MS);
+        scheduleSave(nextDelay);
       }
     }
   }
 
-  function scheduleSave(delay = 700): void {
+  function scheduleSave(delay = REMOTE_SAVE_IDLE_MS): void {
     clearSaveTimer();
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
@@ -257,12 +322,47 @@ export function EditorPage() {
   async function loadDocument(): Promise<void> {
     setLoading(true);
     try {
-      const nextBundle = await api.getDocument(documentId);
+      const serverBundle = await api.getDocument(documentId);
+      const localDrafts = await getDraftsForDocument(documentId);
+      const nextBundle =
+        localDrafts.size > 0
+          ? {
+              ...serverBundle,
+              pages: serverBundle.pages.map((page) => {
+                const draftRecord = localDrafts.get(page.id);
+                if (!draftRecord) {
+                  return page;
+                }
+
+                return {
+                  ...page,
+                  annotations: draftRecord.annotations,
+                  annotationText: draftRecord.annotationText
+                };
+              })
+            }
+          : serverBundle;
+
+      bundleRef.current = nextBundle;
       setBundle(nextBundle);
       setTitleDraft(nextBundle.document.title);
       setActivePageId((current) =>
         nextBundle.pages.some((page) => page.id === current) ? current : nextBundle.pages[0]?.id || ""
       );
+      dirtyPagesRef.current.clear();
+      pendingDraftPagesRef.current.clear();
+      if (localDrafts.size > 0) {
+        localDrafts.forEach((_, pageId) => dirtyPagesRef.current.add(pageId));
+        lastEditAtRef.current = performance.now();
+        startTransition(() => {
+          setSaveState("Pending sync");
+        });
+        scheduleSave();
+      } else {
+        startTransition(() => {
+          setSaveState("All changes saved");
+        });
+      }
       setError("");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Could not open the document.");
@@ -279,8 +379,30 @@ export function EditorPage() {
     loadDocument();
     return () => {
       clearSaveTimer();
+      clearDraftPersistTimer();
+      void flushDraftPersistence();
     };
   }, [documentId]);
+
+  useEffect(() => {
+    function flushDraftsBeforeBackgrounding(): void {
+      void flushDraftPersistence();
+    }
+
+    function handleVisibilityChange(): void {
+      if (document.visibilityState === "hidden") {
+        flushDraftsBeforeBackgrounding();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", flushDraftsBeforeBackgrounding);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", flushDraftsBeforeBackgrounding);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -380,6 +502,7 @@ export function EditorPage() {
     }
 
     const recordHistory = options?.recordHistory ?? true;
+    const nextAnnotationText = collectAnnotationText(nextAnnotations);
 
     setBundle((currentBundle) => {
       if (!currentBundle) {
@@ -405,24 +528,30 @@ export function EditorPage() {
         historyRef.current.set(pageId, historyEntry);
       }
 
-      return {
+      const nextBundle = {
         ...currentBundle,
         pages: currentBundle.pages.map((page) =>
           page.id === pageId
             ? {
                 ...page,
                 annotations: nextAnnotations,
-                annotationText: collectAnnotationText(nextAnnotations)
+                annotationText: nextAnnotationText
               }
             : page
         )
       };
+
+      bundleRef.current = nextBundle;
+      return nextBundle;
     });
 
     dirtyPagesRef.current.add(pageId);
+    pendingDraftPagesRef.current.add(pageId);
+    lastEditAtRef.current = performance.now();
     startTransition(() => {
-      setSaveState("Saving...");
+      setSaveState("Pending sync");
     });
+    scheduleDraftPersistence();
     scheduleSave();
   }
 
