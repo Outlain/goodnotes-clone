@@ -173,6 +173,9 @@ export function EditorPage() {
   const compactThumbnailRailRef = useRef<HTMLDivElement | null>(null);
   const visibleRatiosRef = useRef(new Map<string, number>());
   const activePageIdRef = useRef("");
+  const pendingActivePageIdRef = useRef<string | null>(null);
+  const touchScrollActiveRef = useRef(false);
+  const touchScrollEndTimerRef = useRef<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
   const bundleFlushTimerRef = useRef<number | null>(null);
@@ -255,10 +258,34 @@ export function EditorPage() {
     }
     bundleFlushTimerRef.current = window.setTimeout(() => {
       bundleFlushTimerRef.current = null;
+      if (touchScrollActiveRef.current) {
+        scheduleBundleFlush();
+        return;
+      }
       startTransition(() => {
         flushPendingPageStateToBundle();
       });
     }, 800);
+  }
+
+  function flushPendingActivePage(): void {
+    const pendingActivePageId = pendingActivePageIdRef.current;
+    if (!pendingActivePageId || pendingActivePageId === activePageIdRef.current) {
+      return;
+    }
+
+    pendingActivePageIdRef.current = null;
+    activePageIdRef.current = pendingActivePageId;
+    startTransition(() => {
+      setActivePageId(pendingActivePageId);
+    });
+  }
+
+  function setTouchScrollActive(nextValue: boolean): void {
+    touchScrollActiveRef.current = nextValue;
+    if (!nextValue) {
+      flushPendingActivePage();
+    }
   }
 
   function getEffectivePage(pageId: string, sourceBundle = bundleRef.current): PageRecord | null {
@@ -704,6 +731,42 @@ export function EditorPage() {
   }, [documentId, isCompactLayout]);
 
   useEffect(() => {
+    const pagePanelNode = pagePanelRef.current;
+    if (!pagePanelNode) {
+      return;
+    }
+
+    const markScrollActivity = () => {
+      if (touchScrollEndTimerRef.current != null) {
+        window.clearTimeout(touchScrollEndTimerRef.current);
+        touchScrollEndTimerRef.current = null;
+      }
+      setTouchScrollActive(true);
+      touchScrollEndTimerRef.current = window.setTimeout(() => {
+        touchScrollEndTimerRef.current = null;
+        setTouchScrollActive(false);
+      }, 140);
+    };
+
+    pagePanelNode.addEventListener("touchstart", markScrollActivity, { passive: true });
+    pagePanelNode.addEventListener("touchend", markScrollActivity, { passive: true });
+    pagePanelNode.addEventListener("touchcancel", markScrollActivity, { passive: true });
+    pagePanelNode.addEventListener("scroll", markScrollActivity, { passive: true });
+
+    return () => {
+      if (touchScrollEndTimerRef.current != null) {
+        window.clearTimeout(touchScrollEndTimerRef.current);
+        touchScrollEndTimerRef.current = null;
+      }
+      pagePanelNode.removeEventListener("touchstart", markScrollActivity);
+      pagePanelNode.removeEventListener("touchend", markScrollActivity);
+      pagePanelNode.removeEventListener("touchcancel", markScrollActivity);
+      pagePanelNode.removeEventListener("scroll", markScrollActivity);
+      setTouchScrollActive(false);
+    };
+  }, [documentId, loading, isCompactLayout]);
+
+  useEffect(() => {
     historyRef.current.clear();
     visibleRatiosRef.current.clear();
     setVisiblePageIds([]);
@@ -1076,13 +1139,17 @@ export function EditorPage() {
 
       const mostVisiblePageId = sortedVisibleIds[0];
       if (mostVisiblePageId && mostVisiblePageId !== activePageIdRef.current) {
-        activePageIdRef.current = mostVisiblePageId;
-        // Use startTransition so the active-page change (which recalculates
-        // renderedPageIdSet) doesn't block the scroll thread and cause
-        // layout-shift-induced "snapping" on large documents.
-        startTransition(() => {
-          setActivePageId(mostVisiblePageId);
-        });
+        if (touchScrollActiveRef.current) {
+          pendingActivePageIdRef.current = mostVisiblePageId;
+        } else {
+          activePageIdRef.current = mostVisiblePageId;
+          // Use startTransition so the active-page change (which recalculates
+          // renderedPageIdSet) doesn't block the scroll thread and cause
+          // layout-shift-induced "snapping" on large documents.
+          startTransition(() => {
+            setActivePageId(mostVisiblePageId);
+          });
+        }
       }
     };
 
