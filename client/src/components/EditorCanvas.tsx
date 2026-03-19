@@ -22,6 +22,16 @@ interface PointLike {
   pressure: number;
 }
 
+interface TouchScrollState {
+  identifier: number;
+  startX: number;
+  startY: number;
+  startScrollLeft: number;
+  startScrollTop: number;
+}
+
+type SafariTouch = Touch & { touchType?: string };
+
 function shouldIgnorePointer(event: ReactPointerEvent<SVGSVGElement>, palmSettings: PalmSettings): boolean {
   if (event.pointerType === "mouse") {
     return false;
@@ -78,6 +88,7 @@ export function EditorCanvas({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
+  const touchScrollRef = useRef<TouchScrollState | null>(null);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -120,6 +131,90 @@ export function EditorCanvas({
       observer.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    const svgNode = svgRef.current;
+    const shellNode = shellRef.current;
+    if (!svgNode || !shellNode) {
+      return;
+    }
+
+    const scrollContainer = shellNode.closest(".page-panel");
+    if (!(scrollContainer instanceof HTMLElement)) {
+      return;
+    }
+
+    const findTrackedTouch = (event: TouchEvent): SafariTouch | undefined => {
+      const activeIdentifier = touchScrollRef.current?.identifier;
+      if (activeIdentifier == null) {
+        return undefined;
+      }
+
+      return [...event.touches, ...event.changedTouches].find((touch) => touch.identifier === activeIdentifier) as SafariTouch | undefined;
+    };
+
+    const isDirectTouch = (touch: SafariTouch | undefined): boolean => !touch?.touchType || touch.touchType === "direct";
+    const shouldManuallyScrollTouch = (touch: SafariTouch | undefined): boolean => {
+      if (!isDirectTouch(touch)) {
+        return false;
+      }
+
+      return palmSettings.stylusOnly || tool === "hand";
+    };
+
+    const handleTouchStart = (event: TouchEvent) => {
+      const touch = event.changedTouches[0] as SafariTouch | undefined;
+      if (!shouldManuallyScrollTouch(touch)) {
+        return;
+      }
+      if (!touch) {
+        return;
+      }
+
+      touchScrollRef.current = {
+        identifier: touch.identifier,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        startScrollLeft: scrollContainer.scrollLeft,
+        startScrollTop: scrollContainer.scrollTop
+      };
+
+      event.preventDefault();
+    };
+
+    const handleTouchMove = (event: TouchEvent) => {
+      const trackedTouch = findTrackedTouch(event);
+      if (!trackedTouch || !touchScrollRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+      scrollContainer.scrollLeft = touchScrollRef.current.startScrollLeft - (trackedTouch.clientX - touchScrollRef.current.startX);
+      scrollContainer.scrollTop = touchScrollRef.current.startScrollTop - (trackedTouch.clientY - touchScrollRef.current.startY);
+    };
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      const trackedTouch = findTrackedTouch(event);
+      if (!trackedTouch || !touchScrollRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+      touchScrollRef.current = null;
+    };
+
+    svgNode.addEventListener("touchstart", handleTouchStart, { passive: false });
+    svgNode.addEventListener("touchmove", handleTouchMove, { passive: false });
+    svgNode.addEventListener("touchend", handleTouchEnd, { passive: false });
+    svgNode.addEventListener("touchcancel", handleTouchEnd, { passive: false });
+
+    return () => {
+      svgNode.removeEventListener("touchstart", handleTouchStart);
+      svgNode.removeEventListener("touchmove", handleTouchMove);
+      svgNode.removeEventListener("touchend", handleTouchEnd);
+      svgNode.removeEventListener("touchcancel", handleTouchEnd);
+    };
+  }, [palmSettings.stylusOnly, tool]);
 
   function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -286,8 +381,7 @@ export function EditorCanvas({
   const renderZoom = Math.max(0.2, fitScale * zoom);
   const annotationLayerClassName = [
     "annotation-layer",
-    tool === "hand" ? "annotation-hand" : "",
-    palmSettings.stylusOnly ? "annotation-touch-scroll" : ""
+    tool === "hand" ? "annotation-hand" : ""
   ]
     .filter(Boolean)
     .join(" ");
