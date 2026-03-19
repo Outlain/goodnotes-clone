@@ -62,16 +62,21 @@ export async function saveAnnotationsInWorker(
   pageId: string,
   annotations: Annotation[],
   annotationText: string,
-  mode: "replace" | "append" = "replace"
+  mode: "replace" | "append" = "replace",
+  syncClientId = ""
 ): Promise<void> {
   const worker = getWorker();
   if (!worker) {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    if (syncClientId) {
+      headers["X-Sync-Client-Id"] = syncClientId;
+    }
     const response = await fetch(`/api/pages/${pageId}/annotations${mode === "append" ? "/append" : ""}`, {
       method: mode === "append" ? "POST" : "PUT",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers,
       body: JSON.stringify({
         annotations,
         annotationText
@@ -100,6 +105,7 @@ export async function saveAnnotationsInWorker(
       pageId,
       annotations,
       annotationText,
+      syncClientId,
       debug: debugEnabled
     });
   });

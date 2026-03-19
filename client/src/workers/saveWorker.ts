@@ -7,6 +7,7 @@ interface SaveRequestMessage {
   pageId: string;
   annotations: Annotation[];
   annotationText: string;
+  syncClientId: string;
   debug: boolean;
 }
 
@@ -37,15 +38,19 @@ self.addEventListener("message", async (event: MessageEvent<SaveRequestMessage>)
   }
 
   const startedAt = performance.now();
-  const { id, mode, pageId, annotations, annotationText, debug } = event.data;
+  const { id, mode, pageId, annotations, annotationText, syncClientId, debug } = event.data;
 
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    if (syncClientId) {
+      headers["X-Sync-Client-Id"] = syncClientId;
+    }
     const response = await fetch(`/api/pages/${pageId}/annotations${mode === "append" ? "/append" : ""}`, {
       method: mode === "append" ? "POST" : "PUT",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers,
       body: JSON.stringify({
         annotations,
         annotationText

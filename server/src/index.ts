@@ -2,11 +2,13 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
 import helmet from "helmet";
+import { createServer } from "node:http";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { env } from "./lib/env.js";
 import { requireSession } from "./lib/auth.js";
 import { HttpError } from "./lib/http.js";
+import { setupWebSocketServer } from "./lib/sync.js";
 import { libraryRouter } from "./routes/library.js";
 import { sessionRouter } from "./routes/session.js";
 
@@ -55,6 +57,9 @@ app.use((error: Error, _request: express.Request, response: express.Response, _n
   });
 });
 
-app.listen(env.port, () => {
+const server = createServer(app);
+setupWebSocketServer(server);
+
+server.listen(env.port, () => {
   console.log(`Inkflow server listening on port ${env.port}`);
 });

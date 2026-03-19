@@ -588,6 +588,11 @@ export function deletePage(pageId: string): DocumentBundle {
   return getDocumentBundle(pageRow.document_id);
 }
 
+export function getPageDocumentId(pageId: string): string | null {
+  const row = db.prepare("SELECT document_id FROM pages WHERE id = ?").get(pageId) as { document_id: string } | undefined;
+  return row?.document_id ?? null;
+}
+
 export function updatePageAnnotations(pageId: string, annotations: Annotation[], annotationText: string): PagePayload {
   const pageRow = db.prepare("SELECT * FROM pages WHERE id = ?").get(pageId) as PageRow | undefined;
   if (!pageRow) {

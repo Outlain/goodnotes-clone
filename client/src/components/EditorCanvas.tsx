@@ -334,12 +334,12 @@ function EditorCanvasInner({
     circle.setAttribute("cx", String(point.x));
     circle.setAttribute("cy", String(point.y));
     circle.setAttribute("r", String(eraserSize / 2));
-    circle.style.display = "";
+    circle.style.opacity = "1";
   }
 
   function hideEraserCursor(): void {
     const circle = eraserCursorRef.current;
-    if (circle) circle.style.display = "none";
+    if (circle) circle.style.opacity = "0";
   }
 
   function createTextAnnotation(x: number, y: number): void {
@@ -651,15 +651,15 @@ function EditorCanvasInner({
           {tool === "eraser" && (
             <circle
               ref={eraserCursorRef}
+              className="eraser-cursor"
               cx={0}
               cy={0}
               r={eraserSize / 2}
-              fill="rgba(255,255,255,0.15)"
-              stroke="rgba(100,100,100,0.6)"
-              strokeWidth={1.5}
-              strokeDasharray="4 3"
+              fill="rgba(255,255,255,0.25)"
+              stroke="rgba(50,50,50,0.8)"
+              strokeWidth={2}
+              strokeDasharray="5 4"
               pointerEvents="none"
-              style={{ display: "none" }}
             />
           )}
         </svg>

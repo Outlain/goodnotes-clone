@@ -351,7 +351,12 @@ a {
   white-space: pre-wrap;
 }
 
-/* ── Eraser size controls ─────────────────────────────── */
+/* ── Eraser ───────────────────────────────────────────── */
+
+.eraser-cursor {
+  opacity: 0;
+  transition: opacity 0.08s ease-out;
+}
 
 .eraser-size-popup {
   display: flex;
@@ -362,21 +367,46 @@ a {
 .eraser-size-button {
   display: grid;
   place-items: center;
-  background: none;
+  background: rgba(255, 252, 245, 0.82);
   border: 2px solid transparent;
-  border-radius: 10px;
-  padding: 3px;
+  border-radius: 12px;
+  padding: 4px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
 }
 
 .eraser-size-button:hover {
-  background: rgba(24, 49, 79, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  transform: scale(1.06);
 }
 
 .eraser-size-button.active {
   border-color: var(--accent);
-  background: rgba(24, 49, 79, 0.06);
+  background: #fff;
+}
+
+/* Compact toolbar (dark background) overrides */
+.compact-tool-scroll .eraser-size-popup {
+  gap: 6px;
+}
+
+.compact-tool-scroll .eraser-size-button {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.compact-tool-scroll .eraser-size-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.compact-tool-scroll .eraser-size-button.active {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: #6cb4ee;
+}
+
+.compact-tool-scroll .eraser-size-button svg circle {
+  fill: rgba(255, 255, 255, 0.22);
+  stroke: rgba(255, 255, 255, 0.7);
 }
 
 .eraser-size-row {

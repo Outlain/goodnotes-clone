@@ -10,6 +10,7 @@ import {
   deletePage,
   getDocumentBundle,
   getLibraryPayload,
+  getPageDocumentId,
   getStoredFile,
   insertBlankPage,
   renameDocument,
@@ -21,6 +22,7 @@ import { HttpError } from "../lib/http.js";
 import { asyncRoute } from "../lib/http.js";
 import { buildExportPdf, inspectPdf } from "../lib/pdf.js";
 import { getUploadPath, persistUploadedPdf, tempUploadsDir } from "../lib/storage.js";
+import { broadcastAnnotationUpdate, broadcastDocumentChanged } from "../lib/sync.js";
 
 const folderSchema = z.object({
   title: z.string().trim().min(1).max(80),
@@ -170,20 +172,27 @@ libraryRouter.post("/documents/:documentId/pages/insert", (request, response) =>
     return;
   }
 
-  response.status(201).json(
-    toPublicDocumentBundle(
-      insertBlankPage({
-        documentId: String(request.params.documentId),
-        anchorPageId: parsed.data.anchorPageId,
-        placement: parsed.data.placement,
-        template: parsed.data.template
-      })
-    )
+  const documentId = String(request.params.documentId);
+  const senderId = String(request.headers["x-sync-client-id"] ?? "");
+  const result = toPublicDocumentBundle(
+    insertBlankPage({
+      documentId,
+      anchorPageId: parsed.data.anchorPageId,
+      placement: parsed.data.placement,
+      template: parsed.data.template
+    })
   );
+  broadcastDocumentChanged(documentId, senderId);
+  response.status(201).json(result);
 });
 
 libraryRouter.delete("/pages/:pageId", (request, response) => {
-  response.json(toPublicDocumentBundle(deletePage(String(request.params.pageId))));
+  const pageId = String(request.params.pageId);
+  const documentId = getPageDocumentId(pageId) ?? "";
+  const senderId = String(request.headers["x-sync-client-id"] ?? "");
+  const result = toPublicDocumentBundle(deletePage(pageId));
+  broadcastDocumentChanged(documentId, senderId);
+  response.json(result);
 });
 
 libraryRouter.put("/pages/:pageId/annotations", (request, response) => {
@@ -193,7 +202,12 @@ libraryRouter.put("/pages/:pageId/annotations", (request, response) => {
     return;
   }
 
-  response.json(updatePageAnnotations(String(request.params.pageId), parsed.data.annotations, parsed.data.annotationText));
+  const pageId = String(request.params.pageId);
+  const senderId = String(request.headers["x-sync-client-id"] ?? "");
+  const result = updatePageAnnotations(pageId, parsed.data.annotations, parsed.data.annotationText);
+  const documentId = getPageDocumentId(pageId) ?? "";
+  broadcastAnnotationUpdate(documentId, pageId, result.annotations, result.annotationText, senderId);
+  response.json(result);
 });
 
 libraryRouter.post("/pages/:pageId/annotations/append", (request, response) => {
@@ -203,7 +217,12 @@ libraryRouter.post("/pages/:pageId/annotations/append", (request, response) => {
     return;
   }
 
-  response.json(appendPageAnnotations(String(request.params.pageId), parsed.data.annotations, parsed.data.annotationText));
+  const pageId = String(request.params.pageId);
+  const senderId = String(request.headers["x-sync-client-id"] ?? "");
+  const result = appendPageAnnotations(pageId, parsed.data.annotations, parsed.data.annotationText);
+  const documentId = getPageDocumentId(pageId) ?? "";
+  broadcastAnnotationUpdate(documentId, pageId, result.annotations, result.annotationText, senderId);
+  response.json(result);
 });
 
 libraryRouter.get(

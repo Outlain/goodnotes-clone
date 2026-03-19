@@ -7,6 +7,7 @@ import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../l
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
 import { loadPdfPage } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
+import { SyncClient } from "../lib/syncClient";
 import type { Annotation, DocumentBundle, EditorTool, PageRecord, PageTemplate, PalmSettings } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
@@ -174,6 +175,7 @@ export function EditorPage() {
   const pendingPageStateRef = useRef(new Map<string, { annotations: Annotation[]; annotationText: string }>());
   const syncedPageStateRef = useRef(new Map<string, { annotations: Annotation[]; annotationText: string }>());
   const lastEditAtRef = useRef(0);
+  const syncClientRef = useRef<SyncClient | null>(null);
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -395,7 +397,7 @@ export function EditorPage() {
         const saveMode = canAppend && nextAnnotations.length > 0 ? "append" : "replace";
 
         const startedAt = performance.now();
-        await saveAnnotationsInWorker(page.id, nextAnnotations, page.annotationText, saveMode);
+        await saveAnnotationsInWorker(page.id, nextAnnotations, page.annotationText, saveMode, syncClientRef.current?.getClientId() ?? "");
         if (debugEnabled) {
           console.info("[Inkflow] Save settled", {
             pageId: page.id,
@@ -530,6 +532,39 @@ export function EditorPage() {
     };
   }, [documentId]);
 
+  // ── Real-time sync via WebSocket ───────────────────────
+  useEffect(() => {
+    if (!documentId) return;
+
+    const sync = new SyncClient(documentId, {
+      onAnnotationUpdate(pageId, annotations, annotationText) {
+        // Another client updated annotations on this page — apply them.
+        pendingPageStateRef.current.set(pageId, { annotations, annotationText });
+        syncedPageStateRef.current.set(pageId, { annotations, annotationText });
+        bumpAnnotationRevision(pageId);
+        setBundle((currentBundle) => {
+          if (!currentBundle) return currentBundle;
+          const nextPages = currentBundle.pages.map((p) =>
+            p.id === pageId ? { ...p, annotations, annotationText } : p
+          );
+          const nextBundle = { ...currentBundle, pages: nextPages };
+          bundleRef.current = nextBundle;
+          return nextBundle;
+        });
+      },
+      onDocumentChanged(_changedDocumentId) {
+        // Structural change (page added/deleted/renamed) — reload full bundle.
+        void loadDocument();
+      }
+    });
+    syncClientRef.current = sync;
+
+    return () => {
+      sync.dispose();
+      syncClientRef.current = null;
+    };
+  }, [documentId]);
+
   useEffect(() => {
     function flushDraftsBeforeBackgrounding(): void {
       void flushDraftPersistence();
@@ -538,6 +573,10 @@ export function EditorPage() {
     function handleVisibilityChange(): void {
       if (document.visibilityState === "hidden") {
         flushDraftsBeforeBackgrounding();
+      } else if (document.visibilityState === "visible") {
+        // Coming back from background — reload to pick up remote changes
+        // that may have arrived while the WebSocket was disconnected.
+        void loadDocument();
       }
     }
 
