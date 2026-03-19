@@ -328,7 +328,7 @@ a {
 }
 
 .annotation-hand {
-  pointer-events: none;
+  cursor: grab;
 }
 
 .text-annotation,

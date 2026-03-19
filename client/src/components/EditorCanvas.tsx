@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
 import type { Annotation, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
 import { PdfPageLayer } from "./PdfPageLayer";
@@ -22,8 +22,8 @@ interface PointLike {
   pressure: number;
 }
 
-interface TouchScrollState {
-  identifier: number;
+interface PointerScrollState {
+  pointerId: number;
   startX: number;
   startY: number;
   startScrollLeft: number;
@@ -34,8 +34,6 @@ interface TouchScrollState {
   velocityX: number;
   velocityY: number;
 }
-
-type SafariTouch = Touch & { touchType?: string };
 
 function shouldIgnorePointer(event: ReactPointerEvent<SVGSVGElement>, palmSettings: PalmSettings): boolean {
   if (event.pointerType === "mouse") {
@@ -93,8 +91,9 @@ export function EditorCanvas({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
-  const touchScrollRef = useRef<TouchScrollState | null>(null);
+  const pointerScrollRef = useRef<PointerScrollState | null>(null);
   const momentumFrameRef = useRef<number | null>(null);
+  const lastPenInteractionAtRef = useRef(0);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -139,152 +138,62 @@ export function EditorCanvas({
   }, []);
 
   useEffect(() => {
-    const svgNode = svgRef.current;
-    const stageNode = stageRef.current;
+    return () => {
+      if (momentumFrameRef.current != null) {
+        window.cancelAnimationFrame(momentumFrameRef.current);
+      }
+    };
+  }, []);
+
+  function getScrollContainer(): HTMLElement | null {
     const shellNode = shellRef.current;
-    if (!svgNode || !stageNode || !shellNode) {
-      return;
+    if (!shellNode) {
+      return null;
     }
 
     const scrollContainer = shellNode.closest(".page-panel");
-    if (!(scrollContainer instanceof HTMLElement)) {
-      return;
+    return scrollContainer instanceof HTMLElement ? scrollContainer : null;
+  }
+
+  function cancelMomentum(): void {
+    if (momentumFrameRef.current != null) {
+      window.cancelAnimationFrame(momentumFrameRef.current);
+      momentumFrameRef.current = null;
     }
+  }
 
-    const findTrackedTouch = (event: TouchEvent): SafariTouch | undefined => {
-      const activeIdentifier = touchScrollRef.current?.identifier;
-      if (activeIdentifier == null) {
-        return undefined;
-      }
+  function startMomentum(scrollContainer: HTMLElement, velocityX: number, velocityY: number): void {
+    cancelMomentum();
 
-      return [...event.touches, ...event.changedTouches].find((touch) => touch.identifier === activeIdentifier) as SafariTouch | undefined;
-    };
+    let nextVelocityX = velocityX;
+    let nextVelocityY = velocityY;
+    let lastFrameTime = performance.now();
 
-    const isDirectTouch = (touch: SafariTouch | undefined): boolean => !touch?.touchType || touch.touchType === "direct";
-    const shouldManuallyScrollTouch = (touch: SafariTouch | undefined): boolean => {
-      if (!isDirectTouch(touch)) {
-        return false;
-      }
+    const step = (timestamp: number) => {
+      const deltaMs = Math.max(1, timestamp - lastFrameTime);
+      lastFrameTime = timestamp;
 
-      return palmSettings.stylusOnly || tool === "hand";
-    };
+      scrollContainer.scrollLeft -= nextVelocityX * deltaMs;
+      scrollContainer.scrollTop -= nextVelocityY * deltaMs;
 
-    const cancelMomentum = () => {
-      if (momentumFrameRef.current != null) {
-        window.cancelAnimationFrame(momentumFrameRef.current);
+      const damping = Math.pow(0.995, deltaMs);
+      nextVelocityX *= damping;
+      nextVelocityY *= damping;
+
+      if (Math.abs(nextVelocityX) < 0.02 && Math.abs(nextVelocityY) < 0.02) {
         momentumFrameRef.current = null;
+        return;
       }
-    };
-
-    const startMomentum = (velocityX: number, velocityY: number) => {
-      cancelMomentum();
-
-      let nextVelocityX = velocityX;
-      let nextVelocityY = velocityY;
-      let lastFrameTime = performance.now();
-
-      const step = (timestamp: number) => {
-        const deltaMs = Math.max(1, timestamp - lastFrameTime);
-        lastFrameTime = timestamp;
-
-        scrollContainer.scrollLeft -= nextVelocityX * deltaMs;
-        scrollContainer.scrollTop -= nextVelocityY * deltaMs;
-
-        const damping = Math.pow(0.992, deltaMs);
-        nextVelocityX *= damping;
-        nextVelocityY *= damping;
-
-        if (Math.abs(nextVelocityX) < 0.02 && Math.abs(nextVelocityY) < 0.02) {
-          momentumFrameRef.current = null;
-          return;
-        }
-
-        momentumFrameRef.current = window.requestAnimationFrame(step);
-      };
 
       momentumFrameRef.current = window.requestAnimationFrame(step);
     };
 
-    const handleTouchStart = (event: TouchEvent) => {
-      const touch = event.changedTouches[0] as SafariTouch | undefined;
-      if (!shouldManuallyScrollTouch(touch)) {
-        return;
-      }
-      if (!touch) {
-        return;
-      }
-      cancelMomentum();
+    momentumFrameRef.current = window.requestAnimationFrame(step);
+  }
 
-      touchScrollRef.current = {
-        identifier: touch.identifier,
-        startX: touch.clientX,
-        startY: touch.clientY,
-        startScrollLeft: scrollContainer.scrollLeft,
-        startScrollTop: scrollContainer.scrollTop,
-        lastX: touch.clientX,
-        lastY: touch.clientY,
-        lastTimestamp: event.timeStamp,
-        velocityX: 0,
-        velocityY: 0
-      };
-
-      event.preventDefault();
-    };
-
-    const handleTouchMove = (event: TouchEvent) => {
-      const trackedTouch = findTrackedTouch(event);
-      if (!trackedTouch || !touchScrollRef.current) {
-        return;
-      }
-
-      event.preventDefault();
-      const deltaMs = Math.max(1, event.timeStamp - touchScrollRef.current.lastTimestamp);
-      const deltaX = trackedTouch.clientX - touchScrollRef.current.lastX;
-      const deltaY = trackedTouch.clientY - touchScrollRef.current.lastY;
-
-      scrollContainer.scrollLeft = touchScrollRef.current.startScrollLeft - (trackedTouch.clientX - touchScrollRef.current.startX);
-      scrollContainer.scrollTop = touchScrollRef.current.startScrollTop - (trackedTouch.clientY - touchScrollRef.current.startY);
-      touchScrollRef.current.velocityX = deltaX / deltaMs;
-      touchScrollRef.current.velocityY = deltaY / deltaMs;
-      touchScrollRef.current.lastX = trackedTouch.clientX;
-      touchScrollRef.current.lastY = trackedTouch.clientY;
-      touchScrollRef.current.lastTimestamp = event.timeStamp;
-    };
-
-    const handleTouchEnd = (event: TouchEvent) => {
-      const trackedTouch = findTrackedTouch(event);
-      if (!trackedTouch || !touchScrollRef.current) {
-        return;
-      }
-
-      event.preventDefault();
-      startMomentum(touchScrollRef.current.velocityX, touchScrollRef.current.velocityY);
-      touchScrollRef.current = null;
-    };
-
-    const suppressSurfaceActivation = (event: Event) => {
-      event.preventDefault();
-    };
-
-    svgNode.addEventListener("touchstart", handleTouchStart, { passive: false });
-    svgNode.addEventListener("touchmove", handleTouchMove, { passive: false });
-    svgNode.addEventListener("touchend", handleTouchEnd, { passive: false });
-    svgNode.addEventListener("touchcancel", handleTouchEnd, { passive: false });
-    stageNode.addEventListener("contextmenu", suppressSurfaceActivation);
-    stageNode.addEventListener("dblclick", suppressSurfaceActivation);
-    stageNode.addEventListener("selectstart", suppressSurfaceActivation);
-
-    return () => {
-      cancelMomentum();
-      svgNode.removeEventListener("touchstart", handleTouchStart);
-      svgNode.removeEventListener("touchmove", handleTouchMove);
-      svgNode.removeEventListener("touchend", handleTouchEnd);
-      svgNode.removeEventListener("touchcancel", handleTouchEnd);
-      stageNode.removeEventListener("contextmenu", suppressSurfaceActivation);
-      stageNode.removeEventListener("dblclick", suppressSurfaceActivation);
-      stageNode.removeEventListener("selectstart", suppressSurfaceActivation);
-    };
-  }, [palmSettings.stylusOnly, tool]);
+  function shouldScrollWithTouchPointer(event: ReactPointerEvent<SVGSVGElement>): boolean {
+    return event.pointerType === "touch" && (palmSettings.stylusOnly || tool === "hand");
+  }
 
   function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -351,8 +260,37 @@ export function EditorCanvas({
   }
 
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (shouldScrollWithTouchPointer(event)) {
+      const scrollContainer = getScrollContainer();
+      if (!scrollContainer) {
+        return;
+      }
+
+      cancelMomentum();
+      event.preventDefault();
+      event.stopPropagation();
+      svgRef.current?.setPointerCapture(event.pointerId);
+      pointerScrollRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startScrollLeft: scrollContainer.scrollLeft,
+        startScrollTop: scrollContainer.scrollTop,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        lastTimestamp: event.timeStamp,
+        velocityX: 0,
+        velocityY: 0
+      };
+      return;
+    }
+
     if (shouldIgnorePointer(event, palmSettings)) {
       return;
+    }
+
+    if (event.pointerType === "pen") {
+      lastPenInteractionAtRef.current = performance.now();
     }
 
     if (shouldCaptureEditorGesture(event, tool, palmSettings)) {
@@ -391,6 +329,27 @@ export function EditorCanvas({
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (pointerScrollRef.current?.pointerId === event.pointerId) {
+      const scrollContainer = getScrollContainer();
+      if (!scrollContainer) {
+        return;
+      }
+
+      event.preventDefault();
+      const deltaMs = Math.max(1, event.timeStamp - pointerScrollRef.current.lastTimestamp);
+      const deltaX = event.clientX - pointerScrollRef.current.lastX;
+      const deltaY = event.clientY - pointerScrollRef.current.lastY;
+
+      scrollContainer.scrollLeft = pointerScrollRef.current.startScrollLeft - (event.clientX - pointerScrollRef.current.startX);
+      scrollContainer.scrollTop = pointerScrollRef.current.startScrollTop - (event.clientY - pointerScrollRef.current.startY);
+      pointerScrollRef.current.velocityX = deltaX / deltaMs;
+      pointerScrollRef.current.velocityY = deltaY / deltaMs;
+      pointerScrollRef.current.lastX = event.clientX;
+      pointerScrollRef.current.lastY = event.clientY;
+      pointerScrollRef.current.lastTimestamp = event.timeStamp;
+      return;
+    }
+
     if (drawingRef.current && draftStroke) {
       event.preventDefault();
       const point = getPoint(event);
@@ -408,8 +367,24 @@ export function EditorCanvas({
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (pointerScrollRef.current?.pointerId === event.pointerId) {
+      const scrollContainer = getScrollContainer();
+      event.preventDefault();
+      if (svgRef.current?.hasPointerCapture(event.pointerId)) {
+        svgRef.current.releasePointerCapture(event.pointerId);
+      }
+      if (scrollContainer) {
+        startMomentum(scrollContainer, pointerScrollRef.current.velocityX, pointerScrollRef.current.velocityY);
+      }
+      pointerScrollRef.current = null;
+      return;
+    }
+
     if (drawingRef.current) {
       event.preventDefault();
+      if (event.pointerType === "pen") {
+        lastPenInteractionAtRef.current = performance.now();
+      }
       drawingRef.current = false;
       if (svgRef.current?.hasPointerCapture(event.pointerId)) {
         svgRef.current.releasePointerCapture(event.pointerId);
@@ -419,10 +394,20 @@ export function EditorCanvas({
 
     if (erasingRef.current) {
       event.preventDefault();
+      if (event.pointerType === "pen") {
+        lastPenInteractionAtRef.current = performance.now();
+      }
       erasingRef.current = false;
       if (svgRef.current?.hasPointerCapture(event.pointerId)) {
         svgRef.current.releasePointerCapture(event.pointerId);
       }
+    }
+  }
+
+  function suppressSyntheticActivation(event: SyntheticEvent<SVGSVGElement>): void {
+    if (performance.now() - lastPenInteractionAtRef.current < 500) {
+      event.preventDefault();
+      event.stopPropagation();
     }
   }
 
@@ -484,8 +469,12 @@ export function EditorCanvas({
           className={annotationLayerClassName}
           ref={svgRef}
           viewBox={`0 0 ${page.width} ${page.height}`}
+          onClick={suppressSyntheticActivation}
+          onDoubleClick={suppressSyntheticActivation}
+          onContextMenu={suppressSyntheticActivation}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
+          onPointerCancel={handlePointerUp}
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
         >
