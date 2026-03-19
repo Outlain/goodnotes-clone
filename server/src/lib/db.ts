@@ -512,8 +512,19 @@ export function insertBlankPage(options: {
         ? anchorRow.position
         : anchorRow.position + 1
       : (lastPage?.position ?? 0) + 1;
+    const highestPosition = lastPage?.position ?? 0;
 
-    db.prepare("UPDATE pages SET position = position + 1 WHERE document_id = ? AND position >= ?").run(options.documentId, nextPosition);
+    const temporaryShift = highestPosition + 2;
+    if (nextPosition <= highestPosition) {
+      // SQLite enforces the unique (document_id, position) index row-by-row, so a simple +1 shift
+      // can still collide mid-update. Move affected rows out of the way first, insert the new page,
+      // then normalize them into their final +1 positions.
+      db.prepare("UPDATE pages SET position = position + ? WHERE document_id = ? AND position >= ?").run(
+        temporaryShift,
+        options.documentId,
+        nextPosition
+      );
+    }
 
     const timestamp = now();
     db.prepare(
@@ -537,6 +548,14 @@ export function insertBlankPage(options: {
       createdAt: timestamp,
       updatedAt: timestamp
     });
+
+    if (nextPosition <= highestPosition) {
+      db.prepare("UPDATE pages SET position = position - ? WHERE document_id = ? AND position >= ?").run(
+        temporaryShift - 1,
+        options.documentId,
+        nextPosition + temporaryShift
+      );
+    }
 
     updateDocumentMetadata(options.documentId);
   });

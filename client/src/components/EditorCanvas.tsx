@@ -54,6 +54,14 @@ function PagePaper({ template }: { template: PageRecord["template"] }) {
   return <div className={`page-paper template-${template ?? "blank"}`} />;
 }
 
+function shouldCaptureEditorGesture(
+  event: ReactPointerEvent<SVGSVGElement>,
+  tool: EditorTool,
+  palmSettings: PalmSettings
+): boolean {
+  return tool !== "hand" && !shouldIgnorePointer(event, palmSettings);
+}
+
 export function EditorCanvas({
   page,
   fileUrl,
@@ -182,6 +190,11 @@ export function EditorCanvas({
       return;
     }
 
+    if (shouldCaptureEditorGesture(event, tool, palmSettings)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
     const point = getPoint(event);
 
     if (tool === "text") {
@@ -214,6 +227,7 @@ export function EditorCanvas({
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>): void {
     if (drawingRef.current && draftStroke) {
+      event.preventDefault();
       const point = getPoint(event);
       setDraftStroke({
         ...draftStroke,
@@ -223,12 +237,14 @@ export function EditorCanvas({
     }
 
     if (erasingRef.current) {
+      event.preventDefault();
       eraseAt(getPoint(event));
     }
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>): void {
     if (drawingRef.current) {
+      event.preventDefault();
       drawingRef.current = false;
       if (svgRef.current?.hasPointerCapture(event.pointerId)) {
         svgRef.current.releasePointerCapture(event.pointerId);
@@ -237,6 +253,7 @@ export function EditorCanvas({
     }
 
     if (erasingRef.current) {
+      event.preventDefault();
       erasingRef.current = false;
       if (svgRef.current?.hasPointerCapture(event.pointerId)) {
         svgRef.current.releasePointerCapture(event.pointerId);
