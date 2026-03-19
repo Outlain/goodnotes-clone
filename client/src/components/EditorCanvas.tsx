@@ -228,7 +228,7 @@ export function EditorCanvas({
 
   function appendStrokePoints(stroke: Extract<Annotation, { type: "stroke" }>, points: AnnotationPoint[]): void {
     points.forEach((point) => {
-      const previous = stroke.points.at(-1);
+      const previous = stroke.points.length ? stroke.points[stroke.points.length - 1] : undefined;
       if (
         previous &&
         Math.abs(previous.x - point.x) < 0.01 &&
