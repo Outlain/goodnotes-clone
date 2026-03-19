@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EditorCanvas } from "../components/EditorCanvas";
 import { PdfThumbnail } from "../components/PdfThumbnail";
@@ -42,7 +42,7 @@ function clampZoom(value: number): number {
 }
 
 function cloneAnnotations(annotations: Annotation[]): Annotation[] {
-  return JSON.parse(JSON.stringify(annotations)) as Annotation[];
+  return annotations;
 }
 
 function IconGlyph({ name }: { name: IconName }) {
@@ -227,12 +227,16 @@ export function EditorPage() {
       }
 
       if (dirtyPagesRef.current.size === 0) {
-        setSaveState("All changes saved");
+        startTransition(() => {
+          setSaveState("All changes saved");
+        });
       }
     } catch (nextError) {
       pageIds.forEach((pageId) => dirtyPagesRef.current.add(pageId));
       setError(nextError instanceof Error ? nextError.message : "Could not save annotations.");
-      setSaveState("Save failed");
+      startTransition(() => {
+        setSaveState("Save failed");
+      });
     } finally {
       saveInFlightRef.current = false;
       if (dirtyPagesRef.current.size > 0 || saveAgainRef.current) {
@@ -387,9 +391,7 @@ export function EditorPage() {
         return currentBundle;
       }
 
-      const currentSerialized = JSON.stringify(currentPage.annotations);
-      const nextSerialized = JSON.stringify(nextAnnotations);
-      if (currentSerialized === nextSerialized) {
+      if (currentPage.annotations === nextAnnotations) {
         return currentBundle;
       }
 
@@ -418,7 +420,9 @@ export function EditorPage() {
     });
 
     dirtyPagesRef.current.add(pageId);
-    setSaveState("Saving...");
+    startTransition(() => {
+      setSaveState("Saving...");
+    });
     scheduleSave();
   }
 
