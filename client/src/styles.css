@@ -218,6 +218,7 @@ a {
   overflow: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  overflow-anchor: none;
 }
 
 .editor-page-indicator {

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
-import type { Annotation, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
+import type { Annotation, AnnotationPoint, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
 import { PdfPageLayer } from "./PdfPageLayer";
 
 interface EditorCanvasProps {
@@ -94,11 +94,18 @@ export function EditorCanvas({
   const pointerScrollRef = useRef<PointerScrollState | null>(null);
   const momentumFrameRef = useRef<number | null>(null);
   const lastPenInteractionAtRef = useRef(0);
+  const draftStrokeRef = useRef<Extract<Annotation, { type: "stroke" }> | null>(null);
+  const draftRenderFrameRef = useRef<number | null>(null);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
 
   useEffect(() => {
+    draftStrokeRef.current = null;
+    if (draftRenderFrameRef.current != null) {
+      window.cancelAnimationFrame(draftRenderFrameRef.current);
+      draftRenderFrameRef.current = null;
+    }
     setDraftStroke(null);
     setEditingTextId(null);
   }, [page.id]);
@@ -141,6 +148,9 @@ export function EditorCanvas({
     return () => {
       if (momentumFrameRef.current != null) {
         window.cancelAnimationFrame(momentumFrameRef.current);
+      }
+      if (draftRenderFrameRef.current != null) {
+        window.cancelAnimationFrame(draftRenderFrameRef.current);
       }
     };
   }, []);
@@ -195,17 +205,56 @@ export function EditorCanvas({
     return event.pointerType === "touch" && (palmSettings.stylusOnly || tool === "hand");
   }
 
-  function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
+  function pointFromClient(clientX: number, clientY: number, pressure = 0.5): AnnotationPoint {
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) {
-      return { x: 0, y: 0, pressure: event.pressure || 0.5 };
+      return { x: 0, y: 0, pressure };
     }
 
     return {
-      x: ((event.clientX - rect.left) / rect.width) * page.width,
-      y: ((event.clientY - rect.top) / rect.height) * page.height,
-      pressure: event.pressure || 0.5
+      x: ((clientX - rect.left) / rect.width) * page.width,
+      y: ((clientY - rect.top) / rect.height) * page.height,
+      pressure
     };
+  }
+
+  function collectPointerSamples(event: ReactPointerEvent<SVGSVGElement>): AnnotationPoint[] {
+    const nativeEvent = event.nativeEvent as PointerEvent;
+    const rawSamples = typeof nativeEvent.getCoalescedEvents === "function" ? nativeEvent.getCoalescedEvents() : [];
+    const samples = rawSamples.length ? rawSamples : [nativeEvent];
+
+    return samples.map((sample) => pointFromClient(sample.clientX, sample.clientY, sample.pressure || event.pressure || 0.5));
+  }
+
+  function appendStrokePoints(stroke: Extract<Annotation, { type: "stroke" }>, points: AnnotationPoint[]): void {
+    points.forEach((point) => {
+      const previous = stroke.points.at(-1);
+      if (
+        previous &&
+        Math.abs(previous.x - point.x) < 0.01 &&
+        Math.abs(previous.y - point.y) < 0.01 &&
+        Math.abs(previous.pressure - point.pressure) < 0.01
+      ) {
+        return;
+      }
+      stroke.points.push(point);
+    });
+  }
+
+  function scheduleDraftStrokeRender(): void {
+    if (draftRenderFrameRef.current != null) {
+      return;
+    }
+
+    draftRenderFrameRef.current = window.requestAnimationFrame(() => {
+      draftRenderFrameRef.current = null;
+      const currentDraftStroke = draftStrokeRef.current;
+      setDraftStroke(currentDraftStroke ? { ...currentDraftStroke, points: [...currentDraftStroke.points] } : null);
+    });
+  }
+
+  function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
+    return pointFromClient(event.clientX, event.clientY, event.pressure || 0.5);
   }
 
   function eraseAt(point: PointLike): void {
@@ -238,24 +287,31 @@ export function EditorCanvas({
   }
 
   function commitDraftStroke(): void {
-    if (!draftStroke) {
+    const bufferedDraftStroke = draftStrokeRef.current ?? draftStroke;
+    if (!bufferedDraftStroke) {
       return;
     }
 
-    if (draftStroke.points.length === 0) {
+    if (bufferedDraftStroke.points.length === 0) {
+      draftStrokeRef.current = null;
       setDraftStroke(null);
       return;
     }
 
     const weightedWidth =
-      (tool === "highlighter" ? strokeWidth * 2.2 : strokeWidth) * (0.72 + averagePressure(draftStroke.points) * 0.5);
+      (tool === "highlighter" ? strokeWidth * 2.2 : strokeWidth) * (0.72 + averagePressure(bufferedDraftStroke.points) * 0.5);
     onChange([
       ...page.annotations,
       {
-        ...draftStroke,
+        ...bufferedDraftStroke,
         width: Number(weightedWidth.toFixed(2))
       }
     ]);
+    draftStrokeRef.current = null;
+    if (draftRenderFrameRef.current != null) {
+      window.cancelAnimationFrame(draftRenderFrameRef.current);
+      draftRenderFrameRef.current = null;
+    }
     setDraftStroke(null);
   }
 
@@ -318,14 +374,20 @@ export function EditorCanvas({
 
     drawingRef.current = true;
     svgRef.current?.setPointerCapture(event.pointerId);
-    setDraftStroke({
+    const nextDraftStroke: Extract<Annotation, { type: "stroke" }> = {
       id: createId(),
       type: "stroke",
       tool: tool === "highlighter" ? "highlighter" : "pen",
       color,
       width: strokeWidth,
-      points: [point]
-    });
+      points: []
+    };
+    appendStrokePoints(nextDraftStroke, collectPointerSamples(event));
+    if (nextDraftStroke.points.length === 0) {
+      nextDraftStroke.points.push(point);
+    }
+    draftStrokeRef.current = nextDraftStroke;
+    setDraftStroke({ ...nextDraftStroke, points: [...nextDraftStroke.points] });
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>): void {
@@ -350,13 +412,10 @@ export function EditorCanvas({
       return;
     }
 
-    if (drawingRef.current && draftStroke) {
+    if (drawingRef.current && draftStrokeRef.current) {
       event.preventDefault();
-      const point = getPoint(event);
-      setDraftStroke({
-        ...draftStroke,
-        points: [...draftStroke.points, point]
-      });
+      appendStrokePoints(draftStrokeRef.current, collectPointerSamples(event));
+      scheduleDraftStrokeRender();
       return;
     }
 
@@ -384,6 +443,9 @@ export function EditorCanvas({
       event.preventDefault();
       if (event.pointerType === "pen") {
         lastPenInteractionAtRef.current = performance.now();
+      }
+      if (draftStrokeRef.current) {
+        appendStrokePoints(draftStrokeRef.current, collectPointerSamples(event));
       }
       drawingRef.current = false;
       if (svgRef.current?.hasPointerCapture(event.pointerId)) {
