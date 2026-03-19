@@ -165,6 +165,7 @@ export function EditorPage() {
   const activePageIdRef = useRef("");
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
+  const bundleFlushTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const saveAgainRef = useRef(false);
   const pendingDraftPagesRef = useRef(new Set<string>());
@@ -220,6 +221,25 @@ export function EditorPage() {
       window.clearTimeout(draftPersistTimerRef.current);
       draftPersistTimerRef.current = null;
     }
+  }
+
+  function clearBundleFlushTimer(): void {
+    if (bundleFlushTimerRef.current != null) {
+      window.clearTimeout(bundleFlushTimerRef.current);
+      bundleFlushTimerRef.current = null;
+    }
+  }
+
+  function scheduleBundleFlush(): void {
+    if (bundleFlushTimerRef.current != null) {
+      return;
+    }
+    bundleFlushTimerRef.current = window.setTimeout(() => {
+      bundleFlushTimerRef.current = null;
+      startTransition(() => {
+        flushPendingPageStateToBundle();
+      });
+    }, 800);
   }
 
   function getEffectivePage(pageId: string, sourceBundle = bundleRef.current): PageRecord | null {
@@ -340,6 +360,11 @@ export function EditorPage() {
       scheduleSave(Math.max(REMOTE_SAVE_IDLE_MS - msSinceLastEdit, 250));
       return;
     }
+
+    // Flush any deferred bundle updates before saving so that the bundle
+    // reflects the latest annotations (for thumbnails, etc.) after save.
+    clearBundleFlushTimer();
+    flushPendingPageStateToBundle();
 
     saveInFlightRef.current = true;
     const pageIds = [...dirtyPagesRef.current];
@@ -496,6 +521,7 @@ export function EditorPage() {
     return () => {
       clearSaveTimer();
       clearDraftPersistTimer();
+      clearBundleFlushTimer();
       flushPendingPageStateToBundle();
       void flushDraftPersistence();
     };
@@ -648,33 +674,30 @@ export function EditorPage() {
       annotationText: nextAnnotationText
     });
 
-    // Bump the annotation revision so EditorCanvas picks up the new
-    // annotations from props.  Normal drawing (onChange from canvas) does
-    // NOT bump the revision — the canvas already owns the latest state.
-    // Only explicit external changes (undo/redo, page ops) bump it.
     if (options?.bumpRevision) {
+      // Undo/redo or explicit external change — update the bundle and
+      // revision immediately so EditorCanvas picks up the new annotations.
       bumpAnnotationRevision(pageId);
+      setBundle((currentBundle) => {
+        if (!currentBundle) {
+          return currentBundle;
+        }
+
+        const nextPages = currentBundle.pages.map((p) =>
+          p.id === pageId ? { ...p, annotations: nextAnnotations, annotationText: nextAnnotationText } : p
+        );
+        const nextBundle = { ...currentBundle, pages: nextPages };
+        bundleRef.current = nextBundle;
+        return nextBundle;
+      });
+    } else {
+      // Normal drawing — DO NOT call setBundle synchronously.  With a large
+      // document (1000+ pages) the resulting React re-render blocks the main
+      // thread long enough to drop Apple Pencil pointer events, causing
+      // strokes to be lost.  Instead, schedule a deferred bundle flush so
+      // thumbnails / search catch up later without blocking drawing.
+      scheduleBundleFlush();
     }
-
-    // Reflect the change in the bundle for thumbnails, search, and other
-    // UI that reads from bundle state.
-    setBundle((currentBundle) => {
-      if (!currentBundle) {
-        return currentBundle;
-      }
-
-      const targetPage = currentBundle.pages.find((p) => p.id === pageId);
-      if (!targetPage || (targetPage.annotations === nextAnnotations && targetPage.annotationText === nextAnnotationText)) {
-        return currentBundle;
-      }
-
-      const nextPages = currentBundle.pages.map((p) =>
-        p.id === pageId ? { ...p, annotations: nextAnnotations, annotationText: nextAnnotationText } : p
-      );
-      const nextBundle = { ...currentBundle, pages: nextPages };
-      bundleRef.current = nextBundle;
-      return nextBundle;
-    });
 
     dirtyPagesRef.current.add(pageId);
     pendingDraftPagesRef.current.add(pageId);
