@@ -1,15 +1,15 @@
 FROM node:20-bookworm-slim AS client-builder
 WORKDIR /app/client
-COPY client/package.json ./
-RUN npm install
+COPY client/package.json client/package-lock.json ./
+RUN npm ci
 COPY client ./
 RUN npm run build
 
 FROM node:20-bookworm-slim AS server-builder
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/server
-COPY server/package.json ./
-RUN npm install
+COPY server/package.json server/package-lock.json ./
+RUN npm ci
 COPY server ./
 RUN npm run build && npm prune --omit=dev
 
@@ -26,4 +26,3 @@ RUN mkdir -p /app/data
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
 CMD ["node", "server/dist/index.js"]
-
