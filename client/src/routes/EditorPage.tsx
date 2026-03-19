@@ -19,6 +19,8 @@ const LOCAL_DRAFT_DELAY_MS = 15000;
 const REMOTE_SAVE_IDLE_MS = 15000;
 const REMOTE_SAVE_RETRY_MS = 4000;
 
+const eraserSizes = [10, 20, 36, 56];
+
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
   { value: "pen", label: "Pen", icon: "pen" },
   { value: "highlighter", label: "Highlighter", icon: "highlighter" },
@@ -179,6 +181,7 @@ export function EditorPage() {
   const [tool, setTool] = useState<EditorTool>("pen");
   const [inkColor, setInkColor] = useState(inkColors[0]);
   const [strokeWidth, setStrokeWidth] = useState(4);
+  const [eraserSize, setEraserSize] = useState(20);
   const [zoom, setZoom] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [insertTemplate, setInsertTemplate] = useState<PageTemplate>("ruled");
@@ -1338,16 +1341,33 @@ export function EditorPage() {
                 />
               ))}
             </div>
-            <label className="compact-stroke-control">
-              <span>{strokeWidth}px</span>
-              <input
-                max={14}
-                min={1}
-                type="range"
-                value={strokeWidth}
-                onChange={(event) => setStrokeWidth(Number(event.target.value))}
-              />
-            </label>
+            {tool === "eraser" ? (
+              <div className="eraser-size-popup">
+                {eraserSizes.map((size) => (
+                  <button
+                    key={size}
+                    className={`eraser-size-button ${eraserSize === size ? "active" : ""}`}
+                    onClick={() => setEraserSize(size)}
+                    type="button"
+                  >
+                    <svg viewBox="0 0 40 40" width="28" height="28">
+                      <circle cx="20" cy="20" r={size / 2} fill="rgba(100,100,100,0.2)" stroke="rgba(100,100,100,0.6)" strokeWidth="1.5" strokeDasharray="3 2" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <label className="compact-stroke-control">
+                <span>{strokeWidth}px</span>
+                <input
+                  max={14}
+                  min={1}
+                  type="range"
+                  value={strokeWidth}
+                  onChange={(event) => setStrokeWidth(Number(event.target.value))}
+                />
+              </label>
+            )}
             <div className="compact-zoom-group">
               <button aria-label="Zoom out" className="compact-tool-button compact-zoom-button" onClick={() => setZoom((current) => clampZoom(current - 0.1))} type="button">
                 -
@@ -1388,18 +1408,38 @@ export function EditorPage() {
             ))}
           </div>
 
-          <div className="tool-row slider-row">
-            <label htmlFor="stroke-width">Stroke</label>
-            <input
-              id="stroke-width"
-              max={14}
-              min={1}
-              type="range"
-              value={strokeWidth}
-              onChange={(event) => setStrokeWidth(Number(event.target.value))}
-            />
-            <span>{strokeWidth}px</span>
-          </div>
+          {tool === "eraser" ? (
+            <div className="tool-row eraser-size-row">
+              <label>Eraser</label>
+              <div className="eraser-size-popup">
+                {eraserSizes.map((size) => (
+                  <button
+                    key={size}
+                    className={`eraser-size-button ${eraserSize === size ? "active" : ""}`}
+                    onClick={() => setEraserSize(size)}
+                    type="button"
+                  >
+                    <svg viewBox="0 0 40 40" width="32" height="32">
+                      <circle cx="20" cy="20" r={size / 2} fill="rgba(100,100,100,0.2)" stroke="rgba(100,100,100,0.6)" strokeWidth="1.5" strokeDasharray="3 2" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="tool-row slider-row">
+              <label htmlFor="stroke-width">Stroke</label>
+              <input
+                id="stroke-width"
+                max={14}
+                min={1}
+                type="range"
+                value={strokeWidth}
+                onChange={(event) => setStrokeWidth(Number(event.target.value))}
+              />
+              <span>{strokeWidth}px</span>
+            </div>
+          )}
 
           <div className="tool-row save-row">
             <span className="save-pill">{saveState}</span>
@@ -1432,6 +1472,7 @@ export function EditorPage() {
                       page={page}
                       palmSettings={palmSettings}
                       strokeWidth={strokeWidth}
+                      eraserSize={eraserSize}
                       tool={tool}
                       viewportWidthHint={pagePanelViewportWidth}
                       zoom={zoom}

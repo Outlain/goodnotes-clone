@@ -12,6 +12,7 @@ interface EditorCanvasProps {
   tool: EditorTool;
   color: string;
   strokeWidth: number;
+  eraserSize: number;
   palmSettings: PalmSettings;
   annotationRevision: number;
   onChange: (annotations: Annotation[]) => void;
@@ -84,6 +85,7 @@ function EditorCanvasInner({
   tool,
   color,
   strokeWidth,
+  eraserSize,
   palmSettings,
   annotationRevision,
   onChange
@@ -100,6 +102,7 @@ function EditorCanvasInner({
   const draftStrokeRef = useRef<Extract<Annotation, { type: "stroke" }> | null>(null);
   const draftRenderFrameRef = useRef<number | null>(null);
   const revisionRef = useRef(annotationRevision);
+  const eraserCursorRef = useRef<SVGCircleElement | null>(null);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [localAnnotations, setLocalAnnotations] = useState<Annotation[]>(page.annotations);
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
@@ -315,13 +318,28 @@ function EditorCanvasInner({
   function eraseAt(point: PointLike): void {
     const currentAnnotations = annotationsRef.current;
     for (let index = currentAnnotations.length - 1; index >= 0; index -= 1) {
-      if (hitTestAnnotation(currentAnnotations[index], point.x, point.y)) {
+      if (hitTestAnnotation(currentAnnotations[index], point.x, point.y, eraserSize)) {
         const nextAnnotations = [...currentAnnotations];
         nextAnnotations.splice(index, 1);
         applyAnnotations(nextAnnotations);
         break;
       }
     }
+  }
+
+  function updateEraserCursor(event: ReactPointerEvent<SVGSVGElement>): void {
+    const circle = eraserCursorRef.current;
+    if (!circle) return;
+    const point = getPoint(event);
+    circle.setAttribute("cx", String(point.x));
+    circle.setAttribute("cy", String(point.y));
+    circle.setAttribute("r", String(eraserSize / 2));
+    circle.style.display = "";
+  }
+
+  function hideEraserCursor(): void {
+    const circle = eraserCursorRef.current;
+    if (circle) circle.style.display = "none";
   }
 
   function createTextAnnotation(x: number, y: number): void {
@@ -420,6 +438,7 @@ function EditorCanvasInner({
     if (tool === "eraser") {
       erasingRef.current = true;
       svgRef.current?.setPointerCapture(event.pointerId);
+      updateEraserCursor(event);
       eraseAt(point);
       return;
     }
@@ -477,7 +496,13 @@ function EditorCanvasInner({
 
     if (erasingRef.current) {
       event.preventDefault();
+      updateEraserCursor(event);
       eraseAt(getPoint(event));
+      return;
+    }
+
+    if (tool === "eraser" && !drawingRef.current) {
+      updateEraserCursor(event);
     }
   }
 
@@ -594,7 +619,7 @@ function EditorCanvasInner({
           onPointerMove={handlePointerMove}
           onPointerCancel={handlePointerUp}
           onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerUp}
+          onPointerLeave={(event) => { handlePointerUp(event); hideEraserCursor(); }}
         >
           {localAnnotations.map((annotation) =>
             annotation.type === "stroke" ? (
@@ -622,6 +647,21 @@ function EditorCanvasInner({
               strokeWidth={draftStroke.width}
             />
           ) : null}
+
+          {tool === "eraser" && (
+            <circle
+              ref={eraserCursorRef}
+              cx={0}
+              cy={0}
+              r={eraserSize / 2}
+              fill="rgba(255,255,255,0.15)"
+              stroke="rgba(100,100,100,0.6)"
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+              pointerEvents="none"
+              style={{ display: "none" }}
+            />
+          )}
         </svg>
 
         {localAnnotations.map((annotation) => {
@@ -689,6 +729,7 @@ export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) =
     previousProps.tool === nextProps.tool &&
     previousProps.color === nextProps.color &&
     previousProps.strokeWidth === nextProps.strokeWidth &&
+    previousProps.eraserSize === nextProps.eraserSize &&
     previousProps.palmSettings.stylusOnly === nextProps.palmSettings.stylusOnly &&
     previousProps.palmSettings.maxTouchArea === nextProps.palmSettings.maxTouchArea
   );

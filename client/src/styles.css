@@ -351,6 +351,42 @@ a {
   white-space: pre-wrap;
 }
 
+/* ── Eraser size controls ─────────────────────────────── */
+
+.eraser-size-popup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.eraser-size-button {
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.eraser-size-button:hover {
+  background: rgba(24, 49, 79, 0.08);
+}
+
+.eraser-size-button.active {
+  border-color: var(--accent);
+  background: rgba(24, 49, 79, 0.06);
+}
+
+.eraser-size-row {
+  align-items: center;
+}
+
+.eraser-size-row label {
+  margin-right: 0.5rem;
+}
+
 .page-fallback {
   position: absolute;
   inset: 0;

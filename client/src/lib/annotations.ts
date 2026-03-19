@@ -34,20 +34,27 @@ export function buildStrokePath(annotation: Extract<Annotation, { type: "stroke"
   return `M ${firstPoint.x} ${firstPoint.y} ${rest.map((point) => `L ${point.x} ${point.y}`).join(" ")}`;
 }
 
-export function hitTestAnnotation(annotation: Annotation, x: number, y: number): boolean {
+export function hitTestAnnotation(annotation: Annotation, x: number, y: number, eraserRadius = 8): boolean {
+  const halfEraser = eraserRadius / 2;
+
   if (annotation.type === "text") {
-    return x >= annotation.x && x <= annotation.x + annotation.width && y >= annotation.y && y <= annotation.y + annotation.height;
+    return (
+      x + halfEraser >= annotation.x &&
+      x - halfEraser <= annotation.x + annotation.width &&
+      y + halfEraser >= annotation.y &&
+      y - halfEraser <= annotation.y + annotation.height
+    );
   }
 
   if (annotation.points.length === 1) {
     const point = annotation.points[0];
-    return Math.hypot(x - point.x, y - point.y) <= annotation.width + 8;
+    return Math.hypot(x - point.x, y - point.y) <= annotation.width / 2 + halfEraser;
   }
 
   for (let index = 1; index < annotation.points.length; index += 1) {
     const previous = annotation.points[index - 1];
     const current = annotation.points[index];
-    if (distanceToSegment(x, y, previous.x, previous.y, current.x, current.y) <= annotation.width + 8) {
+    if (distanceToSegment(x, y, previous.x, previous.y, current.x, current.y) <= annotation.width / 2 + halfEraser) {
       return true;
     }
   }
