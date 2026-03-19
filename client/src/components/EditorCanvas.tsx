@@ -175,6 +175,35 @@ function EditorCanvasInner({
     };
   }, []);
 
+  // Defeat iPadOS Scribble — the handwriting-recognition feature intercepts
+  // Apple Pencil pointer events at the OS level (WebKit bug #217430), causing
+  // pointerdown/pointerup events to be swallowed during rapid stylus input.
+  // Calling preventDefault() on touchstart/touchmove tells iPadOS that this
+  // element handles its own stylus input, so Scribble backs off.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) {
+      return;
+    }
+
+    function preventScribble(event: TouchEvent): void {
+      // Only block touch defaults when a drawing tool is active.
+      // For the hand tool, let the browser handle pan/zoom natively.
+      if (tool === "hand") {
+        return;
+      }
+      event.preventDefault();
+    }
+
+    svg.addEventListener("touchstart", preventScribble, { passive: false });
+    svg.addEventListener("touchmove", preventScribble, { passive: false });
+
+    return () => {
+      svg.removeEventListener("touchstart", preventScribble);
+      svg.removeEventListener("touchmove", preventScribble);
+    };
+  }, [tool]);
+
   function getScrollContainer(): HTMLElement | null {
     const shellNode = shellRef.current;
     if (!shellNode) {
