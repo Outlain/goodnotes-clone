@@ -89,6 +89,7 @@ function EditorCanvasInner({
   const shellRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const annotationsRef = useRef<Annotation[]>(page.annotations);
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
   const pointerScrollRef = useRef<PointerScrollState | null>(null);
@@ -97,10 +98,13 @@ function EditorCanvasInner({
   const draftStrokeRef = useRef<Extract<Annotation, { type: "stroke" }> | null>(null);
   const draftRenderFrameRef = useRef<number | null>(null);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
+  const [localAnnotations, setLocalAnnotations] = useState<Annotation[]>(page.annotations);
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
 
   useEffect(() => {
+    annotationsRef.current = page.annotations;
+    setLocalAnnotations(page.annotations);
     draftStrokeRef.current = null;
     if (draftRenderFrameRef.current != null) {
       window.cancelAnimationFrame(draftRenderFrameRef.current);
@@ -109,6 +113,13 @@ function EditorCanvasInner({
     setDraftStroke(null);
     setEditingTextId(null);
   }, [page.id]);
+
+  useEffect(() => {
+    if (page.annotations !== annotationsRef.current) {
+      annotationsRef.current = page.annotations;
+      setLocalAnnotations(page.annotations);
+    }
+  }, [page.annotations]);
 
   useEffect(() => {
     if (!viewportWidthHint) {
@@ -257,12 +268,19 @@ function EditorCanvasInner({
     return pointFromClient(event.clientX, event.clientY, event.pressure || 0.5);
   }
 
+  function applyAnnotations(nextAnnotations: Annotation[]): void {
+    annotationsRef.current = nextAnnotations;
+    setLocalAnnotations(nextAnnotations);
+    onChange(nextAnnotations);
+  }
+
   function eraseAt(point: PointLike): void {
-    for (let index = page.annotations.length - 1; index >= 0; index -= 1) {
-      if (hitTestAnnotation(page.annotations[index], point.x, point.y)) {
-        const nextAnnotations = [...page.annotations];
+    const currentAnnotations = annotationsRef.current;
+    for (let index = currentAnnotations.length - 1; index >= 0; index -= 1) {
+      if (hitTestAnnotation(currentAnnotations[index], point.x, point.y)) {
+        const nextAnnotations = [...currentAnnotations];
         nextAnnotations.splice(index, 1);
-        onChange(nextAnnotations);
+        applyAnnotations(nextAnnotations);
         break;
       }
     }
@@ -282,7 +300,7 @@ function EditorCanvasInner({
       color,
       fontSize: 18
     };
-    onChange([...page.annotations, next]);
+    applyAnnotations([...annotationsRef.current, next]);
     setEditingTextId(next.id);
   }
 
@@ -300,8 +318,8 @@ function EditorCanvasInner({
 
     const weightedWidth =
       (tool === "highlighter" ? strokeWidth * 2.2 : strokeWidth) * (0.72 + averagePressure(bufferedDraftStroke.points) * 0.5);
-    onChange([
-      ...page.annotations,
+    applyAnnotations([
+      ...annotationsRef.current,
       {
         ...bufferedDraftStroke,
         width: Number(weightedWidth.toFixed(2))
@@ -474,8 +492,8 @@ function EditorCanvasInner({
   }
 
   function updateTextAnnotation(annotationId: string, nextText: string): void {
-    onChange(
-      page.annotations.map((annotation) =>
+    applyAnnotations(
+      annotationsRef.current.map((annotation) =>
         annotation.type === "text" && annotation.id === annotationId
           ? {
               ...annotation,
@@ -487,9 +505,9 @@ function EditorCanvasInner({
   }
 
   function finishTextEditing(annotationId: string): void {
-    const annotation = page.annotations.find((entry) => entry.type === "text" && entry.id === annotationId);
+    const annotation = annotationsRef.current.find((entry) => entry.type === "text" && entry.id === annotationId);
     if (annotation?.type === "text" && !annotation.text.trim()) {
-      onChange(page.annotations.filter((entry) => entry.id !== annotationId));
+      applyAnnotations(annotationsRef.current.filter((entry) => entry.id !== annotationId));
     }
     setEditingTextId(null);
   }
@@ -540,7 +558,7 @@ function EditorCanvasInner({
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
         >
-          {page.annotations.map((annotation) =>
+          {localAnnotations.map((annotation) =>
             annotation.type === "stroke" ? (
               <path
                 key={annotation.id}
@@ -568,7 +586,7 @@ function EditorCanvasInner({
           ) : null}
         </svg>
 
-        {page.annotations.map((annotation) => {
+        {localAnnotations.map((annotation) => {
           if (annotation.type !== "text") {
             return null;
           }

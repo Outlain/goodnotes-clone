@@ -14,8 +14,8 @@ const THUMBNAIL_PREVIEW_RADIUS = 3;
 const RENDER_AHEAD_RADIUS = 2;
 const PREFETCH_RADIUS = 6;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
-const LOCAL_DRAFT_DELAY_MS = 650;
-const REMOTE_SAVE_IDLE_MS = 2200;
+const LOCAL_DRAFT_DELAY_MS = 3200;
+const REMOTE_SAVE_IDLE_MS = 4200;
 const REMOTE_SAVE_RETRY_MS = 1200;
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
