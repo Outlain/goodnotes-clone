@@ -115,6 +115,11 @@ function EditorCanvasInner({
   }, [page.id]);
 
   useEffect(() => {
+    // Accept incoming annotations only when the reference genuinely changed
+    // (e.g. undo/redo, page reload).  During normal drawing the parent now
+    // keeps the bundle in sync via setBundle inside setPageAnnotations, so
+    // page.annotations and annotationsRef.current will always be the same
+    // reference — this guard prevents accidental resets.
     if (page.annotations !== annotationsRef.current) {
       annotationsRef.current = page.annotations;
       setLocalAnnotations(page.annotations);
@@ -638,7 +643,13 @@ function EditorCanvasInner({
 
 export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) => {
   return (
-    previousProps.page === nextProps.page &&
+    previousProps.page.id === nextProps.page.id &&
+    previousProps.page.annotations === nextProps.page.annotations &&
+    previousProps.page.width === nextProps.page.width &&
+    previousProps.page.height === nextProps.page.height &&
+    previousProps.page.kind === nextProps.page.kind &&
+    previousProps.page.template === nextProps.page.template &&
+    previousProps.page.sourcePageIndex === nextProps.page.sourcePageIndex &&
     previousProps.fileUrl === nextProps.fileUrl &&
     previousProps.viewportWidthHint === nextProps.viewportWidthHint &&
     previousProps.zoom === nextProps.zoom &&

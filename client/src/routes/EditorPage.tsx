@@ -637,6 +637,29 @@ export function EditorPage() {
       annotationText: nextAnnotationText
     });
 
+    // Immediately reflect the change in the bundle so that the page prop
+    // passed to EditorCanvas is never stale.  Without this, a React
+    // re-render (e.g. from setSaveState) can pass an outdated
+    // page.annotations to the canvas, and the useEffect that syncs from
+    // props would overwrite the user's in-progress strokes.
+    setBundle((currentBundle) => {
+      if (!currentBundle) {
+        return currentBundle;
+      }
+
+      const targetPage = currentBundle.pages.find((p) => p.id === pageId);
+      if (!targetPage || (targetPage.annotations === nextAnnotations && targetPage.annotationText === nextAnnotationText)) {
+        return currentBundle;
+      }
+
+      const nextPages = currentBundle.pages.map((p) =>
+        p.id === pageId ? { ...p, annotations: nextAnnotations, annotationText: nextAnnotationText } : p
+      );
+      const nextBundle = { ...currentBundle, pages: nextPages };
+      bundleRef.current = nextBundle;
+      return nextBundle;
+    });
+
     dirtyPagesRef.current.add(pageId);
     pendingDraftPagesRef.current.add(pageId);
     lastEditAtRef.current = performance.now();
