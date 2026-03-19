@@ -14,10 +14,9 @@ const THUMBNAIL_PREVIEW_RADIUS = 3;
 const RENDER_AHEAD_RADIUS = 2;
 const PREFETCH_RADIUS = 6;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
-const LOCAL_DRAFT_DELAY_MS = 3200;
-const REMOTE_SAVE_IDLE_MS = 4200;
-const REMOTE_SAVE_RETRY_MS = 1200;
-const BUNDLE_FLUSH_IDLE_MS = 900;
+const LOCAL_DRAFT_DELAY_MS = 15000;
+const REMOTE_SAVE_IDLE_MS = 15000;
+const REMOTE_SAVE_RETRY_MS = 4000;
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
   { value: "pen", label: "Pen", icon: "pen" },
@@ -164,7 +163,6 @@ export function EditorPage() {
   const activePageIdRef = useRef("");
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
-  const bundleFlushTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const saveAgainRef = useRef(false);
   const pendingDraftPagesRef = useRef(new Set<string>());
@@ -215,13 +213,6 @@ export function EditorPage() {
     if (draftPersistTimerRef.current != null) {
       window.clearTimeout(draftPersistTimerRef.current);
       draftPersistTimerRef.current = null;
-    }
-  }
-
-  function clearBundleFlushTimer(): void {
-    if (bundleFlushTimerRef.current != null) {
-      window.clearTimeout(bundleFlushTimerRef.current);
-      bundleFlushTimerRef.current = null;
     }
   }
 
@@ -287,14 +278,6 @@ export function EditorPage() {
       bundleRef.current = nextBundle;
       return nextBundle;
     });
-  }
-
-  function scheduleBundleFlush(delay = BUNDLE_FLUSH_IDLE_MS): void {
-    clearBundleFlushTimer();
-    bundleFlushTimerRef.current = window.setTimeout(() => {
-      bundleFlushTimerRef.current = null;
-      flushPendingPageStateToBundle();
-    }, delay);
   }
 
   async function flushDraftPersistence(): Promise<void> {
@@ -434,7 +417,6 @@ export function EditorPage() {
       );
       dirtyPagesRef.current.clear();
       pendingDraftPagesRef.current.clear();
-      clearBundleFlushTimer();
       if (localDrafts.size > 0) {
         localDrafts.forEach((draftRecord, pageId) => {
           dirtyPagesRef.current.add(pageId);
@@ -445,7 +427,7 @@ export function EditorPage() {
         });
         lastEditAtRef.current = performance.now();
         startTransition(() => {
-          setSaveState("Pending sync");
+          setSaveState("Saved locally");
         });
         scheduleSave();
       } else {
@@ -470,7 +452,6 @@ export function EditorPage() {
     return () => {
       clearSaveTimer();
       clearDraftPersistTimer();
-      clearBundleFlushTimer();
       flushPendingPageStateToBundle();
       void flushDraftPersistence();
     };
@@ -622,10 +603,6 @@ export function EditorPage() {
     dirtyPagesRef.current.add(pageId);
     pendingDraftPagesRef.current.add(pageId);
     lastEditAtRef.current = performance.now();
-    startTransition(() => {
-      setSaveState((current) => (current === "Pending sync" ? current : "Pending sync"));
-    });
-    scheduleBundleFlush();
     scheduleDraftPersistence();
     scheduleSave();
   }
