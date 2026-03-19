@@ -13,6 +13,7 @@ interface EditorCanvasProps {
   color: string;
   strokeWidth: number;
   palmSettings: PalmSettings;
+  annotationRevision: number;
   onChange: (annotations: Annotation[]) => void;
 }
 
@@ -84,6 +85,7 @@ function EditorCanvasInner({
   color,
   strokeWidth,
   palmSettings,
+  annotationRevision,
   onChange
 }: EditorCanvasProps) {
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -97,6 +99,7 @@ function EditorCanvasInner({
   const lastPenInteractionAtRef = useRef(0);
   const draftStrokeRef = useRef<Extract<Annotation, { type: "stroke" }> | null>(null);
   const draftRenderFrameRef = useRef<number | null>(null);
+  const revisionRef = useRef(annotationRevision);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [localAnnotations, setLocalAnnotations] = useState<Annotation[]>(page.annotations);
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
@@ -112,19 +115,20 @@ function EditorCanvasInner({
     }
     setDraftStroke(null);
     setEditingTextId(null);
+    revisionRef.current = annotationRevision;
   }, [page.id]);
 
   useEffect(() => {
-    // Accept incoming annotations only when the reference genuinely changed
-    // (e.g. undo/redo, page reload).  During normal drawing the parent now
-    // keeps the bundle in sync via setBundle inside setPageAnnotations, so
-    // page.annotations and annotationsRef.current will always be the same
-    // reference — this guard prevents accidental resets.
-    if (page.annotations !== annotationsRef.current) {
+    // Only accept incoming annotations when the parent explicitly signals a
+    // change via the revision counter (undo/redo, page reload, external
+    // edits).  Normal drawing never bumps the revision, so save-triggered
+    // re-renders can never accidentally overwrite in-progress strokes.
+    if (annotationRevision !== revisionRef.current) {
+      revisionRef.current = annotationRevision;
       annotationsRef.current = page.annotations;
       setLocalAnnotations(page.annotations);
     }
-  }, [page.annotations]);
+  }, [annotationRevision, page.annotations]);
 
   useEffect(() => {
     if (!viewportWidthHint) {
@@ -644,7 +648,7 @@ function EditorCanvasInner({
 export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) => {
   return (
     previousProps.page.id === nextProps.page.id &&
-    previousProps.page.annotations === nextProps.page.annotations &&
+    previousProps.annotationRevision === nextProps.annotationRevision &&
     previousProps.page.width === nextProps.page.width &&
     previousProps.page.height === nextProps.page.height &&
     previousProps.page.kind === nextProps.page.kind &&

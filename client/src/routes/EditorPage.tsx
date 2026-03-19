@@ -156,6 +156,7 @@ export function EditorPage() {
   const dirtyPagesRef = useRef(new Set<string>());
   const bundleRef = useRef<DocumentBundle | null>(null);
   const historyRef = useRef(new Map<string, { past: Annotation[][]; future: Annotation[][] }>());
+  const annotationRevisionRef = useRef(new Map<string, number>());
   const pagePanelRef = useRef<HTMLElement | null>(null);
   const pageElementRefs = useRef(new Map<string, HTMLDivElement>());
   const thumbnailElementRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -381,7 +382,13 @@ export function EditorPage() {
         });
       }
 
-      await Promise.all(pageIds.map((pageId) => deleteDraft(currentBundle.document.id, pageId)));
+      // Only delete drafts for pages that have no further pending changes.
+      // If the user drew new strokes while the save was in flight, the page
+      // is still dirty and the draft must be kept as a crash-recovery safety net.
+      const fullyFlushedPageIds = pageIds.filter((pageId) => !dirtyPagesRef.current.has(pageId));
+      if (fullyFlushedPageIds.length > 0) {
+        await Promise.all(fullyFlushedPageIds.map((pageId) => deleteDraft(currentBundle.document.id, pageId)));
+      }
 
       if (dirtyPagesRef.current.size === 0) {
         startTransition(() => {
@@ -606,7 +613,11 @@ export function EditorPage() {
     }
   }
 
-  function setPageAnnotations(pageId: string, nextAnnotations: Annotation[], options?: { recordHistory?: boolean }) {
+  function bumpAnnotationRevision(pageId: string): void {
+    annotationRevisionRef.current.set(pageId, (annotationRevisionRef.current.get(pageId) ?? 0) + 1);
+  }
+
+  function setPageAnnotations(pageId: string, nextAnnotations: Annotation[], options?: { recordHistory?: boolean; bumpRevision?: boolean }) {
     if (!pageId) {
       return;
     }
@@ -637,11 +648,16 @@ export function EditorPage() {
       annotationText: nextAnnotationText
     });
 
-    // Immediately reflect the change in the bundle so that the page prop
-    // passed to EditorCanvas is never stale.  Without this, a React
-    // re-render (e.g. from setSaveState) can pass an outdated
-    // page.annotations to the canvas, and the useEffect that syncs from
-    // props would overwrite the user's in-progress strokes.
+    // Bump the annotation revision so EditorCanvas picks up the new
+    // annotations from props.  Normal drawing (onChange from canvas) does
+    // NOT bump the revision — the canvas already owns the latest state.
+    // Only explicit external changes (undo/redo, page ops) bump it.
+    if (options?.bumpRevision) {
+      bumpAnnotationRevision(pageId);
+    }
+
+    // Reflect the change in the bundle for thumbnails, search, and other
+    // UI that reads from bundle state.
     setBundle((currentBundle) => {
       if (!currentBundle) {
         return currentBundle;
@@ -735,7 +751,7 @@ export function EditorPage() {
       historyRef.current.set(activePageId, historyEntry);
     }
 
-    setPageAnnotations(activePageId, previous, { recordHistory: false });
+    setPageAnnotations(activePageId, previous, { recordHistory: false, bumpRevision: true });
   }
 
   function redoPageChange(): void {
@@ -759,7 +775,7 @@ export function EditorPage() {
       historyRef.current.set(activePageId, historyEntry);
     }
 
-    setPageAnnotations(activePageId, next, { recordHistory: false });
+    setPageAnnotations(activePageId, next, { recordHistory: false, bumpRevision: true });
   }
 
   async function insertBlankPage(placement: "before" | "after") {
@@ -1386,6 +1402,7 @@ export function EditorPage() {
                 >
                   {shouldRenderPage ? (
                     <EditorCanvas
+                      annotationRevision={annotationRevisionRef.current.get(page.id) ?? 0}
                       color={inkColor}
                       fileUrl={pageFileUrl}
                       onChange={(nextAnnotations) => setPageAnnotations(page.id, nextAnnotations)}
