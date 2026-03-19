@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
-import type { Annotation, AnnotationPoint, EditorTool, PageRecord, PalmSettings, TextAnnotation } from "../types";
+import type { Annotation, AnnotationPoint, EditorTool, LineStyle, PageRecord, PalmSettings, TextAnnotation } from "../types";
 import { PdfPageLayer } from "./PdfPageLayer";
 
 interface EditorCanvasProps {
@@ -12,6 +12,7 @@ interface EditorCanvasProps {
   tool: EditorTool;
   color: string;
   strokeWidth: number;
+  lineStyle: LineStyle;
   eraserSize: number;
   palmSettings: PalmSettings;
   annotationRevision: number;
@@ -69,6 +70,13 @@ function PagePaper({ template }: { template: PageRecord["template"] }) {
   return <div className={`page-paper template-${template ?? "blank"}`} />;
 }
 
+function lineDashArray(style: LineStyle | undefined, width: number): string | undefined {
+  if (!style || style === "solid") return undefined;
+  if (style === "dashed") return `${width * 3} ${width * 2}`;
+  if (style === "dotted") return `${width * 0.1} ${width * 2.5}`;
+  return undefined;
+}
+
 function shouldCaptureEditorGesture(
   event: ReactPointerEvent<SVGSVGElement>,
   tool: EditorTool,
@@ -85,6 +93,7 @@ function EditorCanvasInner({
   tool,
   color,
   strokeWidth,
+  lineStyle,
   eraserSize,
   palmSettings,
   annotationRevision,
@@ -455,6 +464,7 @@ function EditorCanvasInner({
       tool: tool === "highlighter" ? "highlighter" : "pen",
       color,
       width: strokeWidth,
+      lineStyle: lineStyle !== "solid" ? lineStyle : undefined,
       points: []
     };
     appendStrokePoints(nextDraftStroke, collectPointerSamples(event));
@@ -632,6 +642,7 @@ function EditorCanvasInner({
                 strokeLinejoin="round"
                 strokeOpacity={annotation.tool === "highlighter" ? 0.22 : 1}
                 strokeWidth={annotation.width}
+                strokeDasharray={lineDashArray(annotation.lineStyle, annotation.width)}
               />
             ) : null
           )}
@@ -645,6 +656,7 @@ function EditorCanvasInner({
               strokeLinejoin="round"
               strokeOpacity={draftStroke.tool === "highlighter" ? 0.22 : 1}
               strokeWidth={draftStroke.width}
+              strokeDasharray={lineDashArray(draftStroke.lineStyle, draftStroke.width)}
             />
           ) : null}
 
@@ -729,6 +741,7 @@ export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) =
     previousProps.tool === nextProps.tool &&
     previousProps.color === nextProps.color &&
     previousProps.strokeWidth === nextProps.strokeWidth &&
+    previousProps.lineStyle === nextProps.lineStyle &&
     previousProps.eraserSize === nextProps.eraserSize &&
     previousProps.palmSettings.stylusOnly === nextProps.palmSettings.stylusOnly &&
     previousProps.palmSettings.maxTouchArea === nextProps.palmSettings.maxTouchArea

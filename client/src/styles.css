@@ -417,6 +417,116 @@ a {
   margin-right: 0.5rem;
 }
 
+/* ── Stroke size presets ──────────────────────────────── */
+
+.stroke-size-popup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stroke-size-button {
+  display: grid;
+  place-items: center;
+  background: rgba(255, 252, 245, 0.82);
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+  color: var(--ink);
+}
+
+.stroke-size-button:hover {
+  background: rgba(255, 255, 255, 0.92);
+  transform: scale(1.06);
+}
+
+.stroke-size-button.active {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.compact-tool-scroll .stroke-size-popup {
+  gap: 4px;
+}
+
+.compact-tool-scroll .stroke-size-button {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fffdf8;
+}
+
+.compact-tool-scroll .stroke-size-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.compact-tool-scroll .stroke-size-button.active {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: #6cb4ee;
+}
+
+/* ── Line style selector ─────────────────────────────── */
+
+.line-style-popup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.line-style-button {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 252, 245, 0.82);
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  color: var(--ink);
+  font-size: 0.72rem;
+}
+
+.line-style-button:hover {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.line-style-button.active {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.compact-tool-scroll .line-style-popup {
+  gap: 4px;
+}
+
+.compact-tool-scroll .line-style-button {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fffdf8;
+  padding: 4px 6px;
+}
+
+.compact-tool-scroll .line-style-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.compact-tool-scroll .line-style-button.active {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: #6cb4ee;
+}
+
+.stroke-options-row,
+.line-style-row {
+  align-items: center;
+}
+
+.stroke-options-row label,
+.line-style-row label {
+  margin-right: 0.5rem;
+}
+
 .page-fallback {
   position: absolute;
   inset: 0;

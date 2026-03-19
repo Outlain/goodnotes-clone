@@ -8,7 +8,7 @@ import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
 import { loadPdfPage } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
-import type { Annotation, DocumentBundle, EditorTool, PageRecord, PageTemplate, PalmSettings } from "../types";
+import type { Annotation, DocumentBundle, EditorTool, LineStyle, PageRecord, PageTemplate, PalmSettings } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
@@ -16,11 +16,18 @@ const THUMBNAIL_PREVIEW_RADIUS = 3;
 const RENDER_AHEAD_RADIUS = 2;
 const PREFETCH_RADIUS = 6;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
-const LOCAL_DRAFT_DELAY_MS = 15000;
-const REMOTE_SAVE_IDLE_MS = 15000;
-const REMOTE_SAVE_RETRY_MS = 4000;
+const LOCAL_DRAFT_DELAY_MS = 3000;
+const REMOTE_SAVE_IDLE_MS = 2000;
+const REMOTE_SAVE_RETRY_MS = 3000;
 
 const eraserSizes = [10, 20, 36, 56];
+const penSizes = [1, 2, 4, 6, 10];
+const highlighterSizes = [4, 8, 12, 18];
+const lineStyles: { value: LineStyle; label: string }[] = [
+  { value: "solid", label: "Solid" },
+  { value: "dashed", label: "Dashed" },
+  { value: "dotted", label: "Dotted" }
+];
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
   { value: "pen", label: "Pen", icon: "pen" },
@@ -183,6 +190,7 @@ export function EditorPage() {
   const [tool, setTool] = useState<EditorTool>("pen");
   const [inkColor, setInkColor] = useState(inkColors[0]);
   const [strokeWidth, setStrokeWidth] = useState(4);
+  const [lineStyle, setLineStyle] = useState<LineStyle>("solid");
   const [eraserSize, setEraserSize] = useState(20);
   const [zoom, setZoom] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
@@ -390,9 +398,12 @@ export function EditorPage() {
           annotations: [],
           annotationText: ""
         };
+        // Use annotation IDs to detect append-safe saves.  Reference equality
+        // (===) breaks when another client's update replaces syncedPageState
+        // with deserialized annotations.  ID comparison is reliable across clients.
         const canAppend =
           page.annotations.length >= syncedPageState.annotations.length &&
-          syncedPageState.annotations.every((annotation, index) => page.annotations[index] === annotation);
+          syncedPageState.annotations.every((annotation, index) => page.annotations[index]?.id === annotation.id);
         const nextAnnotations = canAppend ? page.annotations.slice(syncedPageState.annotations.length) : page.annotations;
         const saveMode = canAppend && nextAnnotations.length > 0 ? "append" : "replace";
 
@@ -449,11 +460,12 @@ export function EditorPage() {
     }, delay);
   }
 
-  async function loadDocument(): Promise<void> {
+  async function loadDocument(options?: { skipDrafts?: boolean }): Promise<void> {
     setLoading(true);
     try {
       const serverBundle = await api.getDocument(documentId);
-      const localDrafts = await getDraftsForDocument(documentId);
+      const skipDrafts = options?.skipDrafts ?? false;
+      const localDrafts = skipDrafts ? new Map() : await getDraftsForDocument(documentId);
       pendingPageStateRef.current.clear();
       syncedPageStateRef.current = new Map(
         serverBundle.pages.map((page) => [
@@ -464,12 +476,35 @@ export function EditorPage() {
           }
         ])
       );
+
+      // Only apply drafts that are actually newer than the server page.
+      // This prevents stale local drafts from overwriting changes that another
+      // client has already saved to the server.
+      const applicableDrafts = new Map<string, typeof localDrafts extends Map<string, infer V> ? V : never>();
+      if (localDrafts.size > 0) {
+        for (const [pageId, draftRecord] of localDrafts) {
+          const serverPage = serverBundle.pages.find((p) => p.id === pageId);
+          if (!serverPage) {
+            // Page no longer exists on server — discard stale draft
+            void deleteDraft(documentId, pageId);
+            continue;
+          }
+          const serverUpdatedAt = new Date(serverPage.updatedAt).getTime();
+          if (draftRecord.updatedAt > serverUpdatedAt) {
+            applicableDrafts.set(pageId, draftRecord);
+          } else {
+            // Server is newer — discard stale draft
+            void deleteDraft(documentId, pageId);
+          }
+        }
+      }
+
       const nextBundle =
-        localDrafts.size > 0
+        applicableDrafts.size > 0
           ? {
               ...serverBundle,
               pages: serverBundle.pages.map((page) => {
-                const draftRecord = localDrafts.get(page.id);
+                const draftRecord = applicableDrafts.get(page.id);
                 if (!draftRecord) {
                   return page;
                 }
@@ -491,8 +526,8 @@ export function EditorPage() {
       );
       dirtyPagesRef.current.clear();
       pendingDraftPagesRef.current.clear();
-      if (localDrafts.size > 0) {
-        localDrafts.forEach((draftRecord, pageId) => {
+      if (applicableDrafts.size > 0) {
+        applicableDrafts.forEach((draftRecord, pageId) => {
           dirtyPagesRef.current.add(pageId);
           pendingPageStateRef.current.set(pageId, {
             annotations: draftRecord.annotations,
@@ -538,23 +573,32 @@ export function EditorPage() {
 
     const sync = new SyncClient(documentId, {
       onAnnotationUpdate(pageId, annotations, annotationText) {
-        // Another client updated annotations on this page — apply them.
-        pendingPageStateRef.current.set(pageId, { annotations, annotationText });
+        // Another client saved annotations for this page.
+        // Update the "last-known server state" so our next save can diff correctly.
         syncedPageStateRef.current.set(pageId, { annotations, annotationText });
-        bumpAnnotationRevision(pageId);
-        setBundle((currentBundle) => {
-          if (!currentBundle) return currentBundle;
-          const nextPages = currentBundle.pages.map((p) =>
-            p.id === pageId ? { ...p, annotations, annotationText } : p
-          );
-          const nextBundle = { ...currentBundle, pages: nextPages };
-          bundleRef.current = nextBundle;
-          return nextBundle;
-        });
+
+        // Only apply remote annotations to the UI if the local user has NOT
+        // made unsaved edits on this page.  If dirtyPagesRef includes this page
+        // the user's local work takes priority and will be saved & broadcast
+        // to the other client shortly.
+        if (!dirtyPagesRef.current.has(pageId)) {
+          pendingPageStateRef.current.delete(pageId);
+          bumpAnnotationRevision(pageId);
+          setBundle((currentBundle) => {
+            if (!currentBundle) return currentBundle;
+            const nextPages = currentBundle.pages.map((p) =>
+              p.id === pageId ? { ...p, annotations, annotationText } : p
+            );
+            const nextBundle = { ...currentBundle, pages: nextPages };
+            bundleRef.current = nextBundle;
+            return nextBundle;
+          });
+        }
       },
       onDocumentChanged(_changedDocumentId) {
         // Structural change (page added/deleted/renamed) — reload full bundle.
-        void loadDocument();
+        // Skip drafts: the server just changed, so server state is authoritative.
+        void loadDocument({ skipDrafts: true });
       }
     });
     syncClientRef.current = sync;
@@ -574,9 +618,13 @@ export function EditorPage() {
       if (document.visibilityState === "hidden") {
         flushDraftsBeforeBackgrounding();
       } else if (document.visibilityState === "visible") {
-        // Coming back from background — reload to pick up remote changes
-        // that may have arrived while the WebSocket was disconnected.
-        void loadDocument();
+        // Coming back from background — only reload if we have NO dirty local
+        // edits.  If there are dirty pages the user was mid-edit; a full reload
+        // would clobber their unsaved work.  The WebSocket will reconnect and
+        // pick up remote changes via the annotationUpdate handler.
+        if (dirtyPagesRef.current.size === 0) {
+          void loadDocument();
+        }
       }
     }
 
@@ -1395,18 +1443,45 @@ export function EditorPage() {
                   </button>
                 ))}
               </div>
-            ) : (
-              <label className="compact-stroke-control">
-                <span>{strokeWidth}px</span>
-                <input
-                  max={14}
-                  min={1}
-                  type="range"
-                  value={strokeWidth}
-                  onChange={(event) => setStrokeWidth(Number(event.target.value))}
-                />
-              </label>
-            )}
+            ) : (tool === "pen" || tool === "highlighter") ? (
+              <>
+                <div className="stroke-size-popup">
+                  {(tool === "pen" ? penSizes : highlighterSizes).map((size) => (
+                    <button
+                      key={size}
+                      className={`stroke-size-button ${strokeWidth === size ? "active" : ""}`}
+                      onClick={() => setStrokeWidth(size)}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 28 28" width="24" height="24">
+                        <line x1="4" y1="24" x2="24" y2="4" stroke="currentColor" strokeWidth={size} strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+                <div className="line-style-popup">
+                  {lineStyles.map((ls) => (
+                    <button
+                      key={ls.value}
+                      className={`line-style-button ${lineStyle === ls.value ? "active" : ""}`}
+                      onClick={() => setLineStyle(ls.value)}
+                      type="button"
+                      aria-label={ls.label}
+                    >
+                      <svg viewBox="0 0 32 8" width="32" height="8">
+                        <line
+                          x1="2" y1="4" x2="30" y2="4"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeDasharray={ls.value === "dashed" ? "6 4" : ls.value === "dotted" ? "0.5 5" : undefined}
+                        />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
             <div className="compact-zoom-group">
               <button aria-label="Zoom out" className="compact-tool-button compact-zoom-button" onClick={() => setZoom((current) => clampZoom(current - 0.1))} type="button">
                 -
@@ -1465,20 +1540,51 @@ export function EditorPage() {
                 ))}
               </div>
             </div>
-          ) : (
-            <div className="tool-row slider-row">
-              <label htmlFor="stroke-width">Stroke</label>
-              <input
-                id="stroke-width"
-                max={14}
-                min={1}
-                type="range"
-                value={strokeWidth}
-                onChange={(event) => setStrokeWidth(Number(event.target.value))}
-              />
-              <span>{strokeWidth}px</span>
-            </div>
-          )}
+          ) : (tool === "pen" || tool === "highlighter") ? (
+            <>
+              <div className="tool-row stroke-options-row">
+                <label>Size</label>
+                <div className="stroke-size-popup">
+                  {(tool === "pen" ? penSizes : highlighterSizes).map((size) => (
+                    <button
+                      key={size}
+                      className={`stroke-size-button ${strokeWidth === size ? "active" : ""}`}
+                      onClick={() => setStrokeWidth(size)}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 28 28" width="28" height="28">
+                        <line x1="4" y1="24" x2="24" y2="4" stroke="currentColor" strokeWidth={size} strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="tool-row line-style-row">
+                <label>Style</label>
+                <div className="line-style-popup">
+                  {lineStyles.map((ls) => (
+                    <button
+                      key={ls.value}
+                      className={`line-style-button ${lineStyle === ls.value ? "active" : ""}`}
+                      onClick={() => setLineStyle(ls.value)}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 40 8" width="40" height="8">
+                        <line
+                          x1="2" y1="4" x2="38" y2="4"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeDasharray={ls.value === "dashed" ? "6 4" : ls.value === "dotted" ? "0.5 5" : undefined}
+                        />
+                      </svg>
+                      <span>{ls.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : null}
 
           <div className="tool-row save-row">
             <span className="save-pill">{saveState}</span>
@@ -1511,6 +1617,7 @@ export function EditorPage() {
                       page={page}
                       palmSettings={palmSettings}
                       strokeWidth={strokeWidth}
+                      lineStyle={lineStyle}
                       eraserSize={eraserSize}
                       tool={tool}
                       viewportWidthHint={pagePanelViewportWidth}

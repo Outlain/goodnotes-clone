@@ -13,12 +13,15 @@ export interface AnnotationPoint {
   pressure: number;
 }
 
+export type LineStyle = "solid" | "dashed" | "dotted";
+
 export interface StrokeAnnotation {
   id: string;
   type: "stroke";
   tool: "pen" | "highlighter";
   color: string;
   width: number;
+  lineStyle?: LineStyle;
   points: AnnotationPoint[];
 }
 
