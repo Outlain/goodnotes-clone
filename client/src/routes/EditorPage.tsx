@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
 import { loadPdfPage } from "../lib/pdf";
+import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import type { Annotation, DocumentBundle, EditorTool, PageRecord, PageTemplate, PalmSettings } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
@@ -192,6 +193,9 @@ export function EditorPage() {
     stylusOnly: true,
     maxTouchArea: 160
   });
+  const debugEnabled =
+    typeof window !== "undefined" &&
+    (window.location.search.includes("inkflowDebug=1") || window.localStorage.getItem("inkflow-debug") === "1");
   const pageStructureKey = bundle
     ? bundle.pages
         .map(
@@ -350,7 +354,15 @@ export function EditorPage() {
           continue;
         }
 
-        await api.saveAnnotations(page.id, page.annotations, page.annotationText);
+        const startedAt = performance.now();
+        await saveAnnotationsInWorker(page.id, page.annotations, page.annotationText);
+        if (debugEnabled) {
+          console.info("[Inkflow] Save settled", {
+            pageId: page.id,
+            durationMs: performance.now() - startedAt,
+            annotationCount: page.annotations.length
+          });
+        }
       }
 
       await Promise.all(pageIds.map((pageId) => deleteDraft(currentBundle.document.id, pageId)));

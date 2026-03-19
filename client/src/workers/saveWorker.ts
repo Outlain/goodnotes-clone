@@ -1,0 +1,89 @@
+import type { Annotation } from "../types";
+
+interface SaveRequestMessage {
+  type: "save";
+  id: string;
+  pageId: string;
+  annotations: Annotation[];
+  annotationText: string;
+  debug: boolean;
+}
+
+interface SaveSuccessMessage {
+  type: "result";
+  id: string;
+  ok: true;
+  durationMs: number;
+}
+
+interface SaveFailureMessage {
+  type: "result";
+  id: string;
+  ok: false;
+  error: string;
+  durationMs: number;
+}
+
+type SaveWorkerMessage = SaveSuccessMessage | SaveFailureMessage;
+
+function postResult(message: SaveWorkerMessage): void {
+  self.postMessage(message);
+}
+
+self.addEventListener("message", async (event: MessageEvent<SaveRequestMessage>) => {
+  if (event.data?.type !== "save") {
+    return;
+  }
+
+  const startedAt = performance.now();
+  const { id, pageId, annotations, annotationText, debug } = event.data;
+
+  try {
+    const response = await fetch(`/api/pages/${pageId}/annotations`, {
+      method: "PUT",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        annotations,
+        annotationText
+      })
+    });
+
+    if (!response.ok) {
+      const contentType = response.headers.get("content-type") ?? "";
+      const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+      throw new Error(
+        typeof payload === "object" && payload && "message" in payload ? String(payload.message) : "Request failed."
+      );
+    }
+
+    const durationMs = performance.now() - startedAt;
+    if (debug) {
+      console.info("[Inkflow] Worker save complete", { pageId, durationMs, annotationCount: annotations.length });
+    }
+    postResult({
+      type: "result",
+      id,
+      ok: true,
+      durationMs
+    });
+  } catch (error) {
+    const durationMs = performance.now() - startedAt;
+    if (debug) {
+      console.error("[Inkflow] Worker save failed", {
+        pageId,
+        durationMs,
+        error
+      });
+    }
+    postResult({
+      type: "result",
+      id,
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not save annotations.",
+      durationMs
+    });
+  }
+});
