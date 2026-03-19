@@ -6,7 +6,7 @@ import { api } from "../lib/api";
 import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
 import { loadPdfPage } from "../lib/pdf";
-import type { Annotation, DocumentBundle, EditorTool, PageTemplate, PalmSettings } from "../types";
+import type { Annotation, DocumentBundle, EditorTool, PageRecord, PageTemplate, PalmSettings } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
@@ -17,6 +17,7 @@ const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 const LOCAL_DRAFT_DELAY_MS = 3200;
 const REMOTE_SAVE_IDLE_MS = 4200;
 const REMOTE_SAVE_RETRY_MS = 1200;
+const BUNDLE_FLUSH_IDLE_MS = 900;
 
 const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName }> = [
   { value: "pen", label: "Pen", icon: "pen" },
@@ -163,9 +164,11 @@ export function EditorPage() {
   const activePageIdRef = useRef("");
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
+  const bundleFlushTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const saveAgainRef = useRef(false);
   const pendingDraftPagesRef = useRef(new Set<string>());
+  const pendingPageStateRef = useRef(new Map<string, { annotations: Annotation[]; annotationText: string }>());
   const lastEditAtRef = useRef(0);
   const [bundle, setBundle] = useState<DocumentBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -215,6 +218,85 @@ export function EditorPage() {
     }
   }
 
+  function clearBundleFlushTimer(): void {
+    if (bundleFlushTimerRef.current != null) {
+      window.clearTimeout(bundleFlushTimerRef.current);
+      bundleFlushTimerRef.current = null;
+    }
+  }
+
+  function getEffectivePage(pageId: string, sourceBundle = bundleRef.current): PageRecord | null {
+    if (!sourceBundle) {
+      return null;
+    }
+
+    const page = sourceBundle.pages.find((entry) => entry.id === pageId);
+    if (!page) {
+      return null;
+    }
+
+    const pendingPageState = pendingPageStateRef.current.get(pageId);
+    if (!pendingPageState) {
+      return page;
+    }
+
+    return {
+      ...page,
+      annotations: pendingPageState.annotations,
+      annotationText: pendingPageState.annotationText
+    };
+  }
+
+  function flushPendingPageStateToBundle(): void {
+    if (pendingPageStateRef.current.size === 0) {
+      return;
+    }
+
+    setBundle((currentBundle) => {
+      if (!currentBundle) {
+        return currentBundle;
+      }
+
+      let didChange = false;
+      const nextPages = currentBundle.pages.map((page) => {
+        const pendingPageState = pendingPageStateRef.current.get(page.id);
+        if (!pendingPageState) {
+          return page;
+        }
+
+        if (page.annotations === pendingPageState.annotations && page.annotationText === pendingPageState.annotationText) {
+          return page;
+        }
+
+        didChange = true;
+        return {
+          ...page,
+          annotations: pendingPageState.annotations,
+          annotationText: pendingPageState.annotationText
+        };
+      });
+
+      if (!didChange) {
+        return currentBundle;
+      }
+
+      const nextBundle = {
+        ...currentBundle,
+        pages: nextPages
+      };
+      bundleRef.current = nextBundle;
+      return nextBundle;
+    });
+  }
+
+  function scheduleBundleFlush(delay = BUNDLE_FLUSH_IDLE_MS): void {
+    clearBundleFlushTimer();
+    bundleFlushTimerRef.current = window.setTimeout(() => {
+      bundleFlushTimerRef.current = null;
+      flushPendingPageStateToBundle();
+    }, delay);
+  }
+
   async function flushDraftPersistence(): Promise<void> {
     const currentBundle = bundleRef.current;
     if (!currentBundle || pendingDraftPagesRef.current.size === 0) {
@@ -227,7 +309,7 @@ export function EditorPage() {
     try {
       await Promise.all(
         pageIds.map(async (pageId) => {
-          const page = currentBundle.pages.find((entry) => entry.id === pageId);
+          const page = getEffectivePage(pageId, currentBundle);
           if (!page) {
             return;
           }
@@ -280,7 +362,7 @@ export function EditorPage() {
       });
 
       for (const pageId of pageIds) {
-        const page = currentBundle.pages.find((entry) => entry.id === pageId);
+        const page = getEffectivePage(pageId, currentBundle);
         if (!page) {
           continue;
         }
@@ -324,6 +406,7 @@ export function EditorPage() {
     try {
       const serverBundle = await api.getDocument(documentId);
       const localDrafts = await getDraftsForDocument(documentId);
+      pendingPageStateRef.current.clear();
       const nextBundle =
         localDrafts.size > 0
           ? {
@@ -351,8 +434,15 @@ export function EditorPage() {
       );
       dirtyPagesRef.current.clear();
       pendingDraftPagesRef.current.clear();
+      clearBundleFlushTimer();
       if (localDrafts.size > 0) {
-        localDrafts.forEach((_, pageId) => dirtyPagesRef.current.add(pageId));
+        localDrafts.forEach((draftRecord, pageId) => {
+          dirtyPagesRef.current.add(pageId);
+          pendingPageStateRef.current.set(pageId, {
+            annotations: draftRecord.annotations,
+            annotationText: draftRecord.annotationText
+          });
+        });
         lastEditAtRef.current = performance.now();
         startTransition(() => {
           setSaveState("Pending sync");
@@ -380,6 +470,8 @@ export function EditorPage() {
     return () => {
       clearSaveTimer();
       clearDraftPersistTimer();
+      clearBundleFlushTimer();
+      flushPendingPageStateToBundle();
       void flushDraftPersistence();
     };
   }, [documentId]);
@@ -503,54 +595,37 @@ export function EditorPage() {
 
     const recordHistory = options?.recordHistory ?? true;
     const nextAnnotationText = collectAnnotationText(nextAnnotations);
+    const currentPage = getEffectivePage(pageId);
+    if (!currentPage) {
+      return;
+    }
 
-    setBundle((currentBundle) => {
-      if (!currentBundle) {
-        return currentBundle;
+    if (currentPage.annotations === nextAnnotations) {
+      return;
+    }
+
+    if (recordHistory) {
+      const historyEntry = historyRef.current.get(pageId) ?? { past: [], future: [] };
+      historyEntry.past.push(cloneAnnotations(currentPage.annotations));
+      if (historyEntry.past.length > HISTORY_LIMIT) {
+        historyEntry.past.shift();
       }
+      historyEntry.future = [];
+      historyRef.current.set(pageId, historyEntry);
+    }
 
-      const currentPage = currentBundle.pages.find((page) => page.id === pageId);
-      if (!currentPage) {
-        return currentBundle;
-      }
-
-      if (currentPage.annotations === nextAnnotations) {
-        return currentBundle;
-      }
-
-      if (recordHistory) {
-        const historyEntry = historyRef.current.get(pageId) ?? { past: [], future: [] };
-        historyEntry.past.push(cloneAnnotations(currentPage.annotations));
-        if (historyEntry.past.length > HISTORY_LIMIT) {
-          historyEntry.past.shift();
-        }
-        historyEntry.future = [];
-        historyRef.current.set(pageId, historyEntry);
-      }
-
-      const nextBundle = {
-        ...currentBundle,
-        pages: currentBundle.pages.map((page) =>
-          page.id === pageId
-            ? {
-                ...page,
-                annotations: nextAnnotations,
-                annotationText: nextAnnotationText
-              }
-            : page
-        )
-      };
-
-      bundleRef.current = nextBundle;
-      return nextBundle;
+    pendingPageStateRef.current.set(pageId, {
+      annotations: nextAnnotations,
+      annotationText: nextAnnotationText
     });
 
     dirtyPagesRef.current.add(pageId);
     pendingDraftPagesRef.current.add(pageId);
     lastEditAtRef.current = performance.now();
     startTransition(() => {
-      setSaveState("Pending sync");
+      setSaveState((current) => (current === "Pending sync" ? current : "Pending sync"));
     });
+    scheduleBundleFlush();
     scheduleDraftPersistence();
     scheduleSave();
   }
@@ -574,6 +649,7 @@ export function EditorPage() {
   }
 
   function focusPage(pageId: string, behavior: ScrollBehavior = "smooth"): void {
+    flushPendingPageStateToBundle();
     setActivePageId(pageId);
     if (isCompactLayout) {
       setCompactPagesOpen(false);
@@ -606,7 +682,7 @@ export function EditorPage() {
       return;
     }
 
-    const currentPage = bundle.pages.find((page) => page.id === activePageId);
+    const currentPage = getEffectivePage(activePageId);
     if (!currentPage) {
       return;
     }
@@ -630,7 +706,7 @@ export function EditorPage() {
       return;
     }
 
-    const currentPage = bundle.pages.find((page) => page.id === activePageId);
+    const currentPage = getEffectivePage(activePageId);
     if (!currentPage) {
       return;
     }
