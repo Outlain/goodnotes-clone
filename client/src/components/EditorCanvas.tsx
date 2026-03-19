@@ -28,6 +28,11 @@ interface TouchScrollState {
   startY: number;
   startScrollLeft: number;
   startScrollTop: number;
+  lastX: number;
+  lastY: number;
+  lastTimestamp: number;
+  velocityX: number;
+  velocityY: number;
 }
 
 type SafariTouch = Touch & { touchType?: string };
@@ -89,6 +94,7 @@ export function EditorCanvas({
   const drawingRef = useRef(false);
   const erasingRef = useRef(false);
   const touchScrollRef = useRef<TouchScrollState | null>(null);
+  const momentumFrameRef = useRef<number | null>(null);
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -134,8 +140,9 @@ export function EditorCanvas({
 
   useEffect(() => {
     const svgNode = svgRef.current;
+    const stageNode = stageRef.current;
     const shellNode = shellRef.current;
-    if (!svgNode || !shellNode) {
+    if (!svgNode || !stageNode || !shellNode) {
       return;
     }
 
@@ -162,6 +169,42 @@ export function EditorCanvas({
       return palmSettings.stylusOnly || tool === "hand";
     };
 
+    const cancelMomentum = () => {
+      if (momentumFrameRef.current != null) {
+        window.cancelAnimationFrame(momentumFrameRef.current);
+        momentumFrameRef.current = null;
+      }
+    };
+
+    const startMomentum = (velocityX: number, velocityY: number) => {
+      cancelMomentum();
+
+      let nextVelocityX = velocityX;
+      let nextVelocityY = velocityY;
+      let lastFrameTime = performance.now();
+
+      const step = (timestamp: number) => {
+        const deltaMs = Math.max(1, timestamp - lastFrameTime);
+        lastFrameTime = timestamp;
+
+        scrollContainer.scrollLeft -= nextVelocityX * deltaMs;
+        scrollContainer.scrollTop -= nextVelocityY * deltaMs;
+
+        const damping = Math.pow(0.992, deltaMs);
+        nextVelocityX *= damping;
+        nextVelocityY *= damping;
+
+        if (Math.abs(nextVelocityX) < 0.02 && Math.abs(nextVelocityY) < 0.02) {
+          momentumFrameRef.current = null;
+          return;
+        }
+
+        momentumFrameRef.current = window.requestAnimationFrame(step);
+      };
+
+      momentumFrameRef.current = window.requestAnimationFrame(step);
+    };
+
     const handleTouchStart = (event: TouchEvent) => {
       const touch = event.changedTouches[0] as SafariTouch | undefined;
       if (!shouldManuallyScrollTouch(touch)) {
@@ -170,13 +213,19 @@ export function EditorCanvas({
       if (!touch) {
         return;
       }
+      cancelMomentum();
 
       touchScrollRef.current = {
         identifier: touch.identifier,
         startX: touch.clientX,
         startY: touch.clientY,
         startScrollLeft: scrollContainer.scrollLeft,
-        startScrollTop: scrollContainer.scrollTop
+        startScrollTop: scrollContainer.scrollTop,
+        lastX: touch.clientX,
+        lastY: touch.clientY,
+        lastTimestamp: event.timeStamp,
+        velocityX: 0,
+        velocityY: 0
       };
 
       event.preventDefault();
@@ -189,8 +238,17 @@ export function EditorCanvas({
       }
 
       event.preventDefault();
+      const deltaMs = Math.max(1, event.timeStamp - touchScrollRef.current.lastTimestamp);
+      const deltaX = trackedTouch.clientX - touchScrollRef.current.lastX;
+      const deltaY = trackedTouch.clientY - touchScrollRef.current.lastY;
+
       scrollContainer.scrollLeft = touchScrollRef.current.startScrollLeft - (trackedTouch.clientX - touchScrollRef.current.startX);
       scrollContainer.scrollTop = touchScrollRef.current.startScrollTop - (trackedTouch.clientY - touchScrollRef.current.startY);
+      touchScrollRef.current.velocityX = deltaX / deltaMs;
+      touchScrollRef.current.velocityY = deltaY / deltaMs;
+      touchScrollRef.current.lastX = trackedTouch.clientX;
+      touchScrollRef.current.lastY = trackedTouch.clientY;
+      touchScrollRef.current.lastTimestamp = event.timeStamp;
     };
 
     const handleTouchEnd = (event: TouchEvent) => {
@@ -200,19 +258,31 @@ export function EditorCanvas({
       }
 
       event.preventDefault();
+      startMomentum(touchScrollRef.current.velocityX, touchScrollRef.current.velocityY);
       touchScrollRef.current = null;
+    };
+
+    const suppressSurfaceActivation = (event: Event) => {
+      event.preventDefault();
     };
 
     svgNode.addEventListener("touchstart", handleTouchStart, { passive: false });
     svgNode.addEventListener("touchmove", handleTouchMove, { passive: false });
     svgNode.addEventListener("touchend", handleTouchEnd, { passive: false });
     svgNode.addEventListener("touchcancel", handleTouchEnd, { passive: false });
+    stageNode.addEventListener("contextmenu", suppressSurfaceActivation);
+    stageNode.addEventListener("dblclick", suppressSurfaceActivation);
+    stageNode.addEventListener("selectstart", suppressSurfaceActivation);
 
     return () => {
+      cancelMomentum();
       svgNode.removeEventListener("touchstart", handleTouchStart);
       svgNode.removeEventListener("touchmove", handleTouchMove);
       svgNode.removeEventListener("touchend", handleTouchEnd);
       svgNode.removeEventListener("touchcancel", handleTouchEnd);
+      stageNode.removeEventListener("contextmenu", suppressSurfaceActivation);
+      stageNode.removeEventListener("dblclick", suppressSurfaceActivation);
+      stageNode.removeEventListener("selectstart", suppressSurfaceActivation);
     };
   }, [palmSettings.stylusOnly, tool]);
 

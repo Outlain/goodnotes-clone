@@ -280,6 +280,10 @@ a {
   overflow: hidden;
   background: #fffdf7;
   box-shadow: 0 28px 60px rgba(22, 34, 56, 0.18);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .page-paper,
@@ -289,6 +293,9 @@ a {
   inset: 0;
   width: 100%;
   height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .page-paper {
