@@ -271,7 +271,11 @@ function EditorCanvasInner({
       setAvailableWidth(Math.max(0, measuredWidth - horizontalPadding));
     };
 
-    updateWidth();
+    // Only measure on mount if no hint was provided; otherwise trust the hint
+    // so that the initial size matches the placeholder exactly (no layout shift).
+    if (!viewportWidthHint) {
+      updateWidth();
+    }
 
     const observer = new ResizeObserver((entries) => {
       updateWidth(entries[0]?.contentRect.width);

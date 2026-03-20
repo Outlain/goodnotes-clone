@@ -385,28 +385,37 @@ export function EditorPage() {
   function setTouchScrollActive(nextValue: boolean): void {
     touchScrollActiveRef.current = nextValue;
     if (!nextValue) {
-      // Batch ALL scroll-end state updates in a single startTransition
-      // so React can yield to the browser's scroll handling between frames.
-      // Without this, the re-render for 1500 pages blocks the main thread.
-      startTransition(() => {
-        const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
-          .sort((left, right) => right[1] - left[1])
-          .map(([pageId]) => pageId);
-
-        setVisiblePageIds((current) => {
-          if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
-            return current;
-          }
-          return sortedVisibleIds;
-        });
-
-        const pendingActivePageId = pendingActivePageIdRef.current;
-        if (pendingActivePageId && pendingActivePageId !== activePageIdRef.current) {
-          pendingActivePageIdRef.current = null;
-          activePageIdRef.current = pendingActivePageId;
-          setActivePageId(pendingActivePageId);
+      // Defer state updates completely off the current event loop tick.
+      // On iPad Safari, startTransition alone doesn't yield to the scroll
+      // compositor — the re-render for 1500 pages still blocks touch input.
+      // Using setTimeout(0) ensures the browser processes pending touch/scroll
+      // events before React starts its work.
+      setTimeout(() => {
+        // If the user started scrolling again before this callback ran,
+        // bail out — the next scroll-end will handle the flush.
+        if (touchScrollActiveRef.current) {
+          return;
         }
-      });
+        startTransition(() => {
+          const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
+            .sort((left, right) => right[1] - left[1])
+            .map(([pageId]) => pageId);
+
+          setVisiblePageIds((current) => {
+            if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
+              return current;
+            }
+            return sortedVisibleIds;
+          });
+
+          const pendingActivePageId = pendingActivePageIdRef.current;
+          if (pendingActivePageId && pendingActivePageId !== activePageIdRef.current) {
+            pendingActivePageIdRef.current = null;
+            activePageIdRef.current = pendingActivePageId;
+            setActivePageId(pendingActivePageId);
+          }
+        });
+      }, 0);
     }
   }
 
@@ -905,12 +914,13 @@ export function EditorPage() {
       return;
     }
 
-    const markScrollActivity = () => {
+    // Lightweight scroll-activity tracking:
+    // Touch events mark scroll as active immediately. The scroll handler
+    // only resets the end-timer — no work beyond a single clearTimeout + setTimeout.
+    const scheduleScrollEnd = () => {
       if (touchScrollEndTimerRef.current != null) {
         window.clearTimeout(touchScrollEndTimerRef.current);
-        touchScrollEndTimerRef.current = null;
       }
-      setTouchScrollActive(true);
       touchScrollEndTimerRef.current = window.setTimeout(() => {
         touchScrollEndTimerRef.current = null;
         setTouchScrollActive(false);
@@ -918,7 +928,18 @@ export function EditorPage() {
       }, 300);
     };
 
-    const trackScrollVelocity = () => {
+    const handleTouchBegin = () => {
+      setTouchScrollActive(true);
+      scheduleScrollEnd();
+    };
+
+    const handleScroll = () => {
+      // Mark active on scroll too (desktop mouse wheel, programmatic scroll)
+      if (!touchScrollActiveRef.current) {
+        touchScrollActiveRef.current = true;
+      }
+      scheduleScrollEnd();
+      // Track velocity inline to avoid a second scroll listener
       const now = performance.now();
       const dt = now - lastScrollTimeRef.current;
       if (dt > 0 && dt < 500) {
@@ -928,22 +949,16 @@ export function EditorPage() {
       lastScrollTimeRef.current = now;
     };
 
-    pagePanelNode.addEventListener("touchstart", markScrollActivity, { passive: true });
-    pagePanelNode.addEventListener("touchend", markScrollActivity, { passive: true });
-    pagePanelNode.addEventListener("touchcancel", markScrollActivity, { passive: true });
-    pagePanelNode.addEventListener("scroll", markScrollActivity, { passive: true });
-    pagePanelNode.addEventListener("scroll", trackScrollVelocity, { passive: true });
+    pagePanelNode.addEventListener("touchstart", handleTouchBegin, { passive: true });
+    pagePanelNode.addEventListener("scroll", handleScroll, { passive: true });
 
     return () => {
       if (touchScrollEndTimerRef.current != null) {
         window.clearTimeout(touchScrollEndTimerRef.current);
         touchScrollEndTimerRef.current = null;
       }
-      pagePanelNode.removeEventListener("touchstart", markScrollActivity);
-      pagePanelNode.removeEventListener("touchend", markScrollActivity);
-      pagePanelNode.removeEventListener("touchcancel", markScrollActivity);
-      pagePanelNode.removeEventListener("scroll", markScrollActivity);
-      pagePanelNode.removeEventListener("scroll", trackScrollVelocity);
+      pagePanelNode.removeEventListener("touchstart", handleTouchBegin);
+      pagePanelNode.removeEventListener("scroll", handleScroll);
       setTouchScrollActive(false);
     };
   }, [documentId, loading, isCompactLayout]);
@@ -1609,9 +1624,16 @@ export function EditorPage() {
 
     function handleTouchStart(event: TouchEvent): void {
       const touch = event.touches[0];
-      if (touch) {
-        swipeTouchRef.current = { startX: touch.clientX, startY: touch.clientY };
+      if (!touch) {
+        return;
       }
+      // Only track touches starting near the left/right 40px edge of the screen
+      // so normal vertical scrolling never enters this handler's hot path.
+      if (touch.clientX > 40 && touch.clientX < window.innerWidth - 40) {
+        swipeTouchRef.current = null;
+        return;
+      }
+      swipeTouchRef.current = { startX: touch.clientX, startY: touch.clientY };
     }
 
     function handleTouchEnd(event: TouchEvent): void {
@@ -2403,19 +2425,12 @@ export function EditorPage() {
               const pageRenderMetrics = getPageRenderMetrics(page);
               const pagePreviewUrl = pageFile ? getPagePreviewUrl(pageFile.id, page.sourcePageIndex, pageRenderMetrics.stageWidth) : undefined;
 
-              // Fixed-height wrapper prevents ANY layout shift when transitioning
-              // between placeholder and EditorCanvas. The height is the stage height
-              // plus shell padding (same as what EditorCanvas will measure).
-              const shellPadding = isCompactLayout ? 5.6 : 32; // 0.35rem*2 or 1rem*2
-              const itemHeight = pageRenderMetrics.stageHeight + shellPadding;
-
               return (
                 <div
                   className={`page-stack-item ${activePage?.id === page.id ? "active" : ""}`}
                   data-page-id={page.id}
                   key={page.id}
                   ref={(node) => setPageNode(page.id, node)}
-                  style={{ height: `${itemHeight}px` }}
                 >
                   {shouldRenderPage ? (
                     <EditorCanvas
