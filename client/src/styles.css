@@ -552,17 +552,38 @@ a {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .shape-kind-button,
 .shape-fill-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   border-radius: 999px;
   border: 1px solid rgba(24, 49, 79, 0.12);
   background: rgba(255, 252, 245, 0.82);
   color: var(--ink);
-  padding: 0.5rem 0.85rem;
+  padding: 0.5rem 0.7rem;
   font: inherit;
+}
+
+.shape-kind-button {
+  width: 2.55rem;
+  min-width: 2.55rem;
+  padding: 0.48rem;
+}
+
+.shape-kind-glyph {
+  width: 1.2rem;
+  height: 1.2rem;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  flex: 0 0 auto;
 }
 
 .shape-kind-button.active,
@@ -574,8 +595,9 @@ a {
 }
 
 .compact-fill-button {
-  width: auto;
-  padding: 0 0.9rem;
+  width: 2.9rem;
+  min-width: 2.9rem;
+  padding: 0;
 }
 
 .page-fallback {

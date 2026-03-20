@@ -63,6 +63,9 @@ interface ShapeInteractionState {
 
 const MIN_SHAPE_SIZE = 12;
 const SHAPE_HANDLE_RADIUS = 10;
+const MOMENTUM_MIN_SPEED = 0.42;
+const MOMENTUM_MAX_SPEED = 2.4;
+const MOMENTUM_IDLE_CUTOFF_MS = 70;
 
 function shouldIgnorePointer(event: ReactPointerEvent<SVGSVGElement>, palmSettings: PalmSettings): boolean {
   if (event.pointerType === "mouse") {
@@ -367,7 +370,7 @@ function EditorCanvasInner({
       scrollContainer.scrollLeft -= nextVelocityX * deltaMs;
       scrollContainer.scrollTop -= nextVelocityY * deltaMs;
 
-      const damping = Math.pow(0.995, deltaMs);
+      const damping = Math.pow(0.991, deltaMs);
       nextVelocityX *= damping;
       nextVelocityY *= damping;
 
@@ -837,11 +840,19 @@ function EditorCanvasInner({
     if (pointerScrollRef.current?.pointerId === event.pointerId) {
       const scrollContainer = getScrollContainer();
       event.preventDefault();
+      const pointerScrollState = pointerScrollRef.current;
       if (svgRef.current?.hasPointerCapture(event.pointerId)) {
         svgRef.current.releasePointerCapture(event.pointerId);
       }
-      if (scrollContainer) {
-        startMomentum(scrollContainer, pointerScrollRef.current.velocityX, pointerScrollRef.current.velocityY);
+      const timeSinceLastMove = Math.max(0, event.timeStamp - pointerScrollState.lastTimestamp);
+      const velocityMagnitude = Math.hypot(pointerScrollState.velocityX, pointerScrollState.velocityY);
+      if (scrollContainer && timeSinceLastMove <= MOMENTUM_IDLE_CUTOFF_MS && velocityMagnitude >= MOMENTUM_MIN_SPEED) {
+        const velocityScale = Math.min(1, MOMENTUM_MAX_SPEED / velocityMagnitude);
+        startMomentum(
+          scrollContainer,
+          pointerScrollState.velocityX * velocityScale,
+          pointerScrollState.velocityY * velocityScale
+        );
       }
       pointerScrollRef.current = null;
       return;

@@ -15,6 +15,9 @@ const HISTORY_LIMIT = 60;
 const THUMBNAIL_PREVIEW_RADIUS = 3;
 const RENDER_AHEAD_RADIUS = 3;
 const PREFETCH_RADIUS = 6;
+const HYDRATED_RENDER_RADIUS = 8;
+const INITIAL_HYDRATE_RADIUS = 12;
+const HYDRATED_PAGE_LIMIT = 28;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 const LOCAL_DRAFT_DELAY_MS = 3000;
 const REMOTE_SAVE_IDLE_MS = 2000;
@@ -185,6 +188,56 @@ function IconGlyph({ name }: { name: IconName }) {
   }
 }
 
+function ShapeKindGlyph({ shape }: { shape: ShapeKind }) {
+  if (shape === "rectangle") {
+    return (
+      <svg aria-hidden="true" className="shape-kind-glyph" viewBox="0 0 24 24">
+        <rect height="12" rx="3" width="16" x="4" y="6" />
+      </svg>
+    );
+  }
+
+  if (shape === "ellipse") {
+    return (
+      <svg aria-hidden="true" className="shape-kind-glyph" viewBox="0 0 24 24">
+        <ellipse cx="12" cy="12" rx="8" ry="6" />
+      </svg>
+    );
+  }
+
+  if (shape === "triangle") {
+    return (
+      <svg aria-hidden="true" className="shape-kind-glyph" viewBox="0 0 24 24">
+        <path d="M12 5 20 19H4Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className="shape-kind-glyph" viewBox="0 0 24 24">
+      <path d="M12 4 19 12 12 20 5 12Z" />
+    </svg>
+  );
+}
+
+function ShapeFillGlyph({ filled }: { filled: boolean }) {
+  return (
+    <svg aria-hidden="true" className="shape-kind-glyph" viewBox="0 0 24 24">
+      <rect
+        x="5"
+        y="5"
+        width="14"
+        height="14"
+        rx="3"
+        fill={filled ? "currentColor" : "none"}
+        fillOpacity={filled ? 0.22 : 0}
+      />
+      <path d="M5 19V5h14" />
+      <path d="M5 19h14V5" />
+    </svg>
+  );
+}
+
 export function EditorPage() {
   const { documentId = "" } = useParams();
   const navigate = useNavigate();
@@ -197,6 +250,7 @@ export function EditorPage() {
   const thumbnailElementRefs = useRef(new Map<string, HTMLButtonElement>());
   const compactThumbnailRailRef = useRef<HTMLDivElement | null>(null);
   const visibleRatiosRef = useRef(new Map<string, number>());
+  const hydratedPageOrderRef = useRef<string[]>([]);
   const activePageIdRef = useRef("");
   const pendingActivePageIdRef = useRef<string | null>(null);
   const pendingInitialFocusPageIdRef = useRef<string | null>(null);
@@ -231,6 +285,7 @@ export function EditorPage() {
   const [pagePanelViewportWidth, setPagePanelViewportWidth] = useState(0);
   const [visiblePageIds, setVisiblePageIds] = useState<string[]>([]);
   const [visibleCompactThumbnailIds, setVisibleCompactThumbnailIds] = useState<string[]>([]);
+  const [hydratedPageIds, setHydratedPageIds] = useState<string[]>([]);
   const [isCompactLayout, setIsCompactLayout] = useState(
     () => typeof window !== "undefined" && window.matchMedia(COMPACT_LAYOUT_QUERY).matches
   );
@@ -805,8 +860,10 @@ export function EditorPage() {
   useEffect(() => {
     historyRef.current.clear();
     visibleRatiosRef.current.clear();
+    hydratedPageOrderRef.current = [];
     setVisiblePageIds([]);
     setVisibleCompactThumbnailIds([]);
+    setHydratedPageIds([]);
   }, [documentId]);
 
   useEffect(() => {
@@ -833,6 +890,31 @@ export function EditorPage() {
       });
     });
   }, [activePageId, loading, pageStructureKey]);
+
+  function rememberHydratedPages(nextPageIds: string[]): void {
+    const currentBundle = bundleRef.current;
+    if (!currentBundle || nextPageIds.length === 0) {
+      return;
+    }
+
+    const validPageIdSet = new Set(currentBundle.pages.map((page) => page.id));
+    const dedupedTargets = [...new Set(nextPageIds.filter((pageId) => validPageIdSet.has(pageId)))];
+    if (dedupedTargets.length === 0) {
+      return;
+    }
+
+    const remaining = hydratedPageOrderRef.current.filter(
+      (pageId) => validPageIdSet.has(pageId) && !dedupedTargets.includes(pageId)
+    );
+    const nextOrder = [...remaining, ...dedupedTargets].slice(-HYDRATED_PAGE_LIMIT);
+
+    hydratedPageOrderRef.current = nextOrder;
+    setHydratedPageIds((current) =>
+      current.length === nextOrder.length && current.every((pageId, index) => pageId === nextOrder[index])
+        ? current
+        : nextOrder
+    );
+  }
 
   useEffect(() => {
     if (!isCompactLayout) {
@@ -1263,6 +1345,31 @@ export function EditorPage() {
   }, [documentId, pageStructureKey]);
 
   useEffect(() => {
+    if (!bundle || bundle.pages.length === 0) {
+      return;
+    }
+
+    const visiblePageIdSet = new Set(visiblePageIds);
+    const visiblePositions = bundle.pages
+      .filter((page) => visiblePageIdSet.has(page.id))
+      .map((page) => page.position);
+    const anchorPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
+    if (!anchorPage) {
+      return;
+    }
+
+    const minPosition = visiblePositions.length ? Math.min(...visiblePositions) : anchorPage.position;
+    const maxPosition = visiblePositions.length ? Math.max(...visiblePositions) : anchorPage.position;
+    const radius = visiblePositions.length ? HYDRATED_RENDER_RADIUS : INITIAL_HYDRATE_RADIUS;
+
+    rememberHydratedPages(
+      bundle.pages
+        .filter((page) => page.position >= minPosition - radius && page.position <= maxPosition + radius)
+        .map((page) => page.id)
+    );
+  }, [activePageId, bundle, pageStructureKey, visiblePageIds]);
+
+  useEffect(() => {
     if (!bundle) {
       return;
     }
@@ -1272,8 +1379,12 @@ export function EditorPage() {
       return;
     }
 
+    const hydratedPageIdSet = new Set(hydratedPageIds);
     const warmPages = bundle.pages.filter(
-      (page) => page.kind === "pdf" && Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS && page.sourceFileId
+      (page) =>
+        page.kind === "pdf" &&
+        page.sourceFileId &&
+        (hydratedPageIdSet.has(page.id) || Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS)
     );
 
     warmPages.forEach((page) => {
@@ -1286,7 +1397,7 @@ export function EditorPage() {
         // Best-effort warm cache only.
       });
     });
-  }, [activePageId, fileStructureKey, pageStructureKey]);
+  }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -1378,10 +1489,12 @@ export function EditorPage() {
           .map((page) => page.id)
       : []
   );
+  const hydratedPageIdSet = new Set(hydratedPageIds);
   const renderedPageIdSet = new Set(
     bundle.pages
       .filter(
         (page) =>
+          hydratedPageIdSet.has(page.id) ||
           visiblePageIdSet.has(page.id) ||
           (page.position >= renderAnchorMin - RENDER_AHEAD_RADIUS && page.position <= renderAnchorMax + RENDER_AHEAD_RADIUS)
       )
@@ -1762,18 +1875,22 @@ export function EditorPage() {
                       key={shape.value}
                       className={`shape-kind-button ${shapeKind === shape.value ? "active" : ""}`}
                       onClick={() => setShapeKind(shape.value)}
+                      aria-label={shape.label}
+                      title={shape.label}
                       type="button"
                     >
-                      {shape.label}
+                      <ShapeKindGlyph shape={shape.value} />
                     </button>
                   ))}
                 </div>
                 <button
                   className={`compact-tool-button compact-fill-button ${shapeFilled ? "active" : ""}`}
                   onClick={() => setShapeFilled((current) => !current)}
+                  aria-label={shapeFilled ? "Filled shapes" : "Outline only"}
+                  title={shapeFilled ? "Filled shapes" : "Outline only"}
                   type="button"
                 >
-                  {shapeFilled ? "Filled" : "Outline"}
+                  <ShapeFillGlyph filled={shapeFilled} />
                 </button>
                 <div className="stroke-size-popup">
                   {penSizes.map((size) => (
@@ -1918,9 +2035,11 @@ export function EditorPage() {
                       key={shape.value}
                       className={`shape-kind-button ${shapeKind === shape.value ? "active" : ""}`}
                       onClick={() => setShapeKind(shape.value)}
+                      aria-label={shape.label}
+                      title={shape.label}
                       type="button"
                     >
-                      {shape.label}
+                      <ShapeKindGlyph shape={shape.value} />
                     </button>
                   ))}
                 </div>
@@ -1930,9 +2049,12 @@ export function EditorPage() {
                 <button
                   className={`ghost-button shape-fill-toggle ${shapeFilled ? "active" : ""}`}
                   onClick={() => setShapeFilled((current) => !current)}
+                  aria-label={shapeFilled ? "Shaded shapes" : "Outline only"}
+                  title={shapeFilled ? "Shaded shapes" : "Outline only"}
                   type="button"
                 >
-                  {shapeFilled ? "Shaded" : "Outline only"}
+                  <ShapeFillGlyph filled={shapeFilled} />
+                  <span>{shapeFilled ? "Shaded" : "Outline only"}</span>
                 </button>
               </div>
               <div className="tool-row stroke-options-row">
