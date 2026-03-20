@@ -18,7 +18,6 @@ interface EditorCanvasProps {
   page: PageRecord;
   fileUrl?: string;
   fileSize?: number;
-  previewUrl?: string;
   viewportWidthHint?: number;
   zoom: number;
   tool: EditorTool;
@@ -178,7 +177,6 @@ function EditorCanvasInner({
   page,
   fileUrl,
   fileSize,
-  previewUrl,
   viewportWidthHint,
   zoom,
   tool,
@@ -948,7 +946,6 @@ function EditorCanvasInner({
             pageIndex={page.sourcePageIndex ?? 0}
             url={fileUrl}
             fileSize={fileSize}
-            previewUrl={previewUrl}
             width={page.width}
             height={page.height}
             zoom={renderZoom}
@@ -1133,7 +1130,6 @@ export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) =
     previousProps.page.sourcePageIndex === nextProps.page.sourcePageIndex &&
     previousProps.fileUrl === nextProps.fileUrl &&
     previousProps.fileSize === nextProps.fileSize &&
-    previousProps.previewUrl === nextProps.previewUrl &&
     previousProps.viewportWidthHint === nextProps.viewportWidthHint &&
     previousProps.zoom === nextProps.zoom &&
     previousProps.tool === nextProps.tool &&

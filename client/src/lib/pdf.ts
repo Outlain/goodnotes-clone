@@ -9,7 +9,7 @@ const PREVIEW_WIDTH_BUCKETS = [240, 1000, 1400];
 
 // Limits concurrent PDF page renders to prevent worker thread saturation
 // which causes the main thread to stall (scroll freeze).
-const MAX_CONCURRENT_RENDERS = 3;
+const MAX_CONCURRENT_RENDERS = 2;
 let activeRenders = 0;
 const renderQueue: Array<{ resolve: () => void }> = [];
 

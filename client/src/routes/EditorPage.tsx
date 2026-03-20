@@ -24,7 +24,7 @@ import type {
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
 const THUMBNAIL_PREVIEW_RADIUS = 3;
-const RENDER_AHEAD_RADIUS = 3;
+const RENDER_AHEAD_RADIUS = 1;
 const PREFETCH_RADIUS = 6;
 const HYDRATED_RENDER_RADIUS = 8;
 const INITIAL_HYDRATE_RADIUS = 12;
@@ -1577,13 +1577,12 @@ export function EditorPage() {
         return;
       }
 
-      const hydratedPageIdSet = new Set(hydratedPageIds);
       const visiblePageIdSet = new Set(visiblePageIds);
       const warmPages = bundle.pages.filter(
         (page) =>
           page.kind === "pdf" &&
           page.sourceFileId &&
-          (hydratedPageIdSet.has(page.id) || Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS)
+          Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS
       );
 
       const localFileMap = new Map(bundle!.files.map((f) => [f.id, f]));
@@ -1598,10 +1597,7 @@ export function EditorPage() {
           return;
         }
 
-        const pagePreviewUrl = getPagePreviewUrl(sourceFile.id, page.sourcePageIndex, getPageRenderMetrics(page).stageWidth);
         const thumbnailPreviewUrl = getThumbnailPreviewUrl(sourceFile.id, page.sourcePageIndex);
-
-        void preloadPreviewImage(pagePreviewUrl);
         void preloadPreviewImage(thumbnailPreviewUrl);
 
         const shouldWarmPdfPage =
@@ -1651,7 +1647,7 @@ export function EditorPage() {
         deferredIdleCallbacks.forEach((idleId) => window.cancelIdleCallback(idleId));
       }
     };
-  }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey, visiblePageIds]);
+  }, [activePageId, fileStructureKey, pageStructureKey, visiblePageIds]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -1773,7 +1769,6 @@ export function EditorPage() {
   const renderedPageIdSet = useMemo(() => {
     if (!bundlePages.length) return new Set<string>();
     const visibleSet = new Set(visiblePageIds);
-    const hydratedSet = new Set(hydratedPageIds);
 
     let minPos = activePage?.position ?? bundlePages[0]?.position ?? 1;
     let maxPos = minPos;
@@ -1787,7 +1782,6 @@ export function EditorPage() {
     const result = new Set<string>();
     for (const page of bundlePages) {
       if (
-        hydratedSet.has(page.id) ||
         visibleSet.has(page.id) ||
         (page.position >= minPos - RENDER_AHEAD_RADIUS && page.position <= maxPos + RENDER_AHEAD_RADIUS)
       ) {
@@ -1795,7 +1789,7 @@ export function EditorPage() {
       }
     }
     return result;
-  }, [activePage, bundlePages, hydratedPageIds, visiblePageIds]);
+  }, [activePage, bundlePages, visiblePageIds]);
 
   const previewWindow = useMemo(() => {
     if (!activePage || !bundlePages.length) return new Set<string>();
@@ -1842,11 +1836,6 @@ export function EditorPage() {
 
   function getThumbnailPreviewUrl(fileId: string, sourcePageIndex: number | null): string {
     return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=${resolvePreviewWidthBucket(240)}`;
-  }
-
-  function getPagePreviewUrl(fileId: string, sourcePageIndex: number | null, stageWidth: number): string {
-    const bucketedWidth = resolvePreviewWidthBucket(stageWidth);
-    return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=${bucketedWidth}`;
   }
 
   function getPageRenderMetrics(page: PageRecord): { stageWidth: number; stageHeight: number; renderZoom: number; viewportWidth: number } {
@@ -2506,7 +2495,6 @@ export function EditorPage() {
               const pageFileUrl = pageFile?.url;
               const shouldRenderPage = renderedPageIdSet.has(page.id);
               const pageRenderMetrics = getPageRenderMetrics(page);
-              const pagePreviewUrl = pageFile ? getPagePreviewUrl(pageFile.id, page.sourcePageIndex, pageRenderMetrics.stageWidth) : undefined;
 
               return (
                 <div
@@ -2521,7 +2509,6 @@ export function EditorPage() {
                       color={inkColor}
                       fileSize={pageFile?.size}
                       fileUrl={pageFileUrl}
-                      previewUrl={pagePreviewUrl}
                       onChange={(nextAnnotations) => setPageAnnotations(page.id, nextAnnotations)}
                       page={page}
                       palmSettings={palmSettings}
@@ -2543,19 +2530,9 @@ export function EditorPage() {
                           height: `${pageRenderMetrics.stageHeight}px`
                         }}
                       >
-                        {pagePreviewUrl ? (
-                          <img
-                            alt=""
-                            className="page-preview-image"
-                            decoding="async"
-                            loading="lazy"
-                            src={pagePreviewUrl}
-                          />
-                        ) : (
-                          <div className="page-fallback page-skeleton">
-                            <span>Page {page.position}</span>
-                          </div>
-                        )}
+                        <div className="page-fallback page-skeleton">
+                          <span>Page {page.position}</span>
+                        </div>
                       </div>
                     </div>
                   )}
