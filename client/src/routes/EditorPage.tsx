@@ -12,6 +12,7 @@ import type {
   Annotation,
   DocumentBundle,
   EditorTool,
+  FileRecord,
   LineStyle,
   PageRecord,
   PageSearchResult,
@@ -1649,6 +1650,59 @@ export function EditorPage() {
     };
   }, [isCompactLayout]);
 
+  // Hooks must be called before any early returns (React rules of hooks)
+  const bundleFiles = bundle?.files;
+  const fileMap = useMemo(() => {
+    const map = new Map<string, FileRecord>();
+    if (bundleFiles) {
+      for (const file of bundleFiles) {
+        map.set(file.id, file);
+      }
+    }
+    return map;
+  }, [bundleFiles]);
+
+  const bundlePages = bundle?.pages ?? [];
+  const activePage = bundlePages.find((page) => page.id === activePageId) ?? bundlePages[0] ?? null;
+
+  const renderedPageIdSet = useMemo(() => {
+    if (!bundlePages.length) return new Set<string>();
+    const visibleSet = new Set(visiblePageIds);
+    const hydratedSet = new Set(hydratedPageIds);
+
+    let minPos = activePage?.position ?? bundlePages[0]?.position ?? 1;
+    let maxPos = minPos;
+    for (const page of bundlePages) {
+      if (visibleSet.has(page.id)) {
+        if (page.position < minPos) minPos = page.position;
+        if (page.position > maxPos) maxPos = page.position;
+      }
+    }
+
+    const result = new Set<string>();
+    for (const page of bundlePages) {
+      if (
+        hydratedSet.has(page.id) ||
+        visibleSet.has(page.id) ||
+        (page.position >= minPos - RENDER_AHEAD_RADIUS && page.position <= maxPos + RENDER_AHEAD_RADIUS)
+      ) {
+        result.add(page.id);
+      }
+    }
+    return result;
+  }, [activePage, bundlePages, hydratedPageIds, visiblePageIds]);
+
+  const previewWindow = useMemo(() => {
+    if (!activePage || !bundlePages.length) return new Set<string>();
+    const set = new Set<string>();
+    for (const page of bundlePages) {
+      if (Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS) {
+        set.add(page.id);
+      }
+    }
+    return set;
+  }, [activePage, bundlePages]);
+
   if (loading) {
     return <main className="loading-screen">Opening document...</main>;
   }
@@ -1664,16 +1718,6 @@ export function EditorPage() {
     );
   }
 
-  // Pre-compute file lookup map: O(m) once instead of O(n*m) in the page loop
-  const fileMap = useMemo(() => {
-    const map = new Map<string, (typeof bundle.files)[0]>();
-    for (const file of bundle.files) {
-      map.set(file.id, file);
-    }
-    return map;
-  }, [bundle.files]);
-
-  const activePage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
   const activeFile = activePage?.sourceFileId ? fileMap.get(activePage.sourceFileId) : undefined;
   const bookmarkPage = bundle.document.bookmarkPageId
     ? bundle.pages.find((page) => page.id === bundle.document.bookmarkPageId) ?? null
@@ -1682,44 +1726,6 @@ export function EditorPage() {
   const historyEntry = activePageId ? historyRef.current.get(activePageId) : undefined;
   const canUndo = Boolean(historyEntry?.past.length);
   const canRedo = Boolean(historyEntry?.future.length);
-
-  // Memoize expensive set computations that depend on scroll state
-  const renderedPageIdSet = useMemo(() => {
-    const visibleSet = new Set(visiblePageIds);
-    const hydratedSet = new Set(hydratedPageIds);
-
-    let minPos = activePage?.position ?? bundle.pages[0]?.position ?? 1;
-    let maxPos = minPos;
-    for (const page of bundle.pages) {
-      if (visibleSet.has(page.id)) {
-        if (page.position < minPos) minPos = page.position;
-        if (page.position > maxPos) maxPos = page.position;
-      }
-    }
-
-    const result = new Set<string>();
-    for (const page of bundle.pages) {
-      if (
-        hydratedSet.has(page.id) ||
-        visibleSet.has(page.id) ||
-        (page.position >= minPos - RENDER_AHEAD_RADIUS && page.position <= maxPos + RENDER_AHEAD_RADIUS)
-      ) {
-        result.add(page.id);
-      }
-    }
-    return result;
-  }, [activePage, bundle.pages, hydratedPageIds, visiblePageIds]);
-
-  const previewWindow = useMemo(() => {
-    if (!activePage) return new Set<string>();
-    const set = new Set<string>();
-    for (const page of bundle.pages) {
-      if (Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS) {
-        set.add(page.id);
-      }
-    }
-    return set;
-  }, [activePage, bundle.pages]);
 
   const compactSaveLabel = saveState === "All changes saved" ? "Saved" : saveState;
   const compactInkColors = inkColors.filter(
@@ -2397,13 +2403,19 @@ export function EditorPage() {
               const pageRenderMetrics = getPageRenderMetrics(page);
               const pagePreviewUrl = pageFile ? getPagePreviewUrl(pageFile.id, page.sourcePageIndex, pageRenderMetrics.stageWidth) : undefined;
 
+              // Fixed-height wrapper prevents ANY layout shift when transitioning
+              // between placeholder and EditorCanvas. The height is the stage height
+              // plus shell padding (same as what EditorCanvas will measure).
+              const shellPadding = isCompactLayout ? 5.6 : 32; // 0.35rem*2 or 1rem*2
+              const itemHeight = pageRenderMetrics.stageHeight + shellPadding;
+
               return (
                 <div
                   className={`page-stack-item ${activePage?.id === page.id ? "active" : ""}`}
                   data-page-id={page.id}
                   key={page.id}
                   ref={(node) => setPageNode(page.id, node)}
-                  style={{ containIntrinsicBlockSize: `auto ${pageRenderMetrics.stageHeight + 32}px` }}
+                  style={{ height: `${itemHeight}px` }}
                 >
                   {shouldRenderPage ? (
                     <EditorCanvas

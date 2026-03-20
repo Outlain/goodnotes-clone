@@ -269,6 +269,8 @@ a {
   width: 100%;
   display: flex;
   justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .page-stack-item.active .page-stage {
