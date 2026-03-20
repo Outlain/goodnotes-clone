@@ -16,9 +16,15 @@ const ZOOM_RENDER_DEBOUNCE_MS = 150;
 function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
-  const hasRenderedOnceRef = useRef(false);
   const lastRenderedKeyRef = useRef<string>("");
   const [error, setError] = useState<string>("");
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    setIsReady(false);
+    setError("");
+    lastRenderedKeyRef.current = "";
+  }, [pageIndex, url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,11 +74,11 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: Pd
           canvas.height = cachedSnapshot.height;
           context.drawImage(cachedSnapshot, 0, 0);
           canvas.style.opacity = "1";
-          hasRenderedOnceRef.current = true;
           lastRenderedKeyRef.current = cacheKey;
 
           if (!cancelled) {
             setError("");
+            setIsReady(true);
           }
           return;
         }
@@ -131,11 +137,11 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: Pd
 
         page.cleanup();
         storePageSnapshot(cacheKey, canvas);
-        hasRenderedOnceRef.current = true;
         lastRenderedKeyRef.current = cacheKey;
 
         if (!cancelled) {
           setError("");
+          setIsReady(true);
         }
       } catch (nextError) {
         const isCancelledError =
@@ -161,7 +167,7 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: Pd
     }
 
     // Cache hit or first render: start immediately. Otherwise debounce (zoom changes).
-    if (getCachedPageSnapshot(cacheKey) || !hasRenderedOnceRef.current) {
+    if (getCachedPageSnapshot(cacheKey) || !isReady) {
       render();
     } else {
       debounceTimer = setTimeout(render, ZOOM_RENDER_DEBOUNCE_MS);
@@ -177,8 +183,8 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: Pd
   return (
     <>
       <canvas className="pdf-canvas" ref={canvasRef} />
-      {!hasRenderedOnceRef.current && !error ? (
-        <div className="page-fallback page-skeleton">Loading PDF page...</div>
+      {!isReady && !error ? (
+        <div aria-hidden="true" className="page-fallback page-skeleton" />
       ) : null}
       {error ? <div className="page-fallback">PDF preview failed: {error}</div> : null}
     </>

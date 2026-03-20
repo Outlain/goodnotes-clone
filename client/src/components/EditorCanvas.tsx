@@ -257,6 +257,10 @@ function EditorCanvasInner({
   }, [viewportWidthHint]);
 
   useLayoutEffect(() => {
+    if (viewportWidthHint) {
+      return;
+    }
+
     const shellNode = shellRef.current;
     if (!shellNode || typeof ResizeObserver === "undefined") {
       return;
@@ -268,12 +272,7 @@ function EditorCanvasInner({
       const horizontalPadding = Number.parseFloat(shellStyle.paddingLeft) + Number.parseFloat(shellStyle.paddingRight);
       setAvailableWidth(Math.max(0, measuredWidth - horizontalPadding));
     };
-
-    // Only measure on mount if no hint was provided; otherwise trust the hint
-    // so that the initial size matches the placeholder exactly (no layout shift).
-    if (!viewportWidthHint) {
-      updateWidth();
-    }
+    updateWidth();
 
     const observer = new ResizeObserver((entries) => {
       updateWidth(entries[0]?.contentRect.width);
@@ -284,7 +283,7 @@ function EditorCanvasInner({
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [viewportWidthHint]);
 
   useEffect(() => {
     return () => {

@@ -5,7 +5,7 @@ import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
 import { collectAnnotationText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
-import { loadPdfPage, preloadPreviewImage, resolvePreviewWidthBucket, scaleCachesForDocument } from "../lib/pdf";
+import { resolvePreviewWidthBucket, scaleCachesForDocument } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
 import type {
@@ -24,11 +24,6 @@ import type {
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
 const THUMBNAIL_PREVIEW_RADIUS = 3;
-const RENDER_AHEAD_RADIUS = 1;
-const PREFETCH_RADIUS = 6;
-const HYDRATED_RENDER_RADIUS = 8;
-const INITIAL_HYDRATE_RADIUS = 12;
-const HYDRATED_PAGE_LIMIT = 28;
 const COMPACT_LAYOUT_QUERY = "(max-width: 1100px)";
 const LOCAL_DRAFT_DELAY_MS = 3000;
 const REMOTE_SAVE_IDLE_MS = 2000;
@@ -261,7 +256,6 @@ export function EditorPage() {
   const thumbnailElementRefs = useRef(new Map<string, HTMLButtonElement>());
   const compactThumbnailRailRef = useRef<HTMLDivElement | null>(null);
   const visibleRatiosRef = useRef(new Map<string, number>());
-  const hydratedPageOrderRef = useRef<string[]>([]);
   const activePageIdRef = useRef("");
   const pendingActivePageIdRef = useRef<string | null>(null);
   const pendingInitialFocusPageIdRef = useRef<string | null>(null);
@@ -269,9 +263,6 @@ export function EditorPage() {
   const touchScrollEndTimerRef = useRef<number | null>(null);
   const scrollSettledIdleRef = useRef<number | null>(null);
   const scrollSettledTimeoutRef = useRef<number | null>(null);
-  const scrollVelocityRef = useRef(0);
-  const lastScrollTopRef = useRef(0);
-  const lastScrollTimeRef = useRef(0);
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
   const bundleFlushTimerRef = useRef<number | null>(null);
@@ -305,7 +296,6 @@ export function EditorPage() {
   const [pagePanelViewportWidth, setPagePanelViewportWidth] = useState(0);
   const [visiblePageIds, setVisiblePageIds] = useState<string[]>([]);
   const [visibleCompactThumbnailIds, setVisibleCompactThumbnailIds] = useState<string[]>([]);
-  const [hydratedPageIds, setHydratedPageIds] = useState<string[]>([]);
   const [isCompactLayout, setIsCompactLayout] = useState(
     () => typeof window !== "undefined" && window.matchMedia(COMPACT_LAYOUT_QUERY).matches
   );
@@ -334,7 +324,6 @@ export function EditorPage() {
         )
         .join("|")
     : "";
-  const fileStructureKey = bundle ? bundle.files.map((file) => `${file.id}:${file.url}`).join("|") : "";
 
   function clearSaveTimer(): void {
     if (saveTimerRef.current != null) {
@@ -983,7 +972,6 @@ export function EditorPage() {
       touchScrollEndTimerRef.current = window.setTimeout(() => {
         touchScrollEndTimerRef.current = null;
         setTouchScrollActive(false);
-        scrollVelocityRef.current = 0;
       }, 300);
     };
 
@@ -998,14 +986,6 @@ export function EditorPage() {
         touchScrollActiveRef.current = true;
       }
       scheduleScrollEnd();
-      // Track velocity inline to avoid a second scroll listener
-      const now = performance.now();
-      const dt = now - lastScrollTimeRef.current;
-      if (dt > 0 && dt < 500) {
-        scrollVelocityRef.current = (pagePanelNode.scrollTop - lastScrollTopRef.current) / dt;
-      }
-      lastScrollTopRef.current = pagePanelNode.scrollTop;
-      lastScrollTimeRef.current = now;
     };
 
     pagePanelNode.addEventListener("touchstart", handleTouchBegin, { passive: true });
@@ -1026,10 +1006,8 @@ export function EditorPage() {
   useEffect(() => {
     historyRef.current.clear();
     visibleRatiosRef.current.clear();
-    hydratedPageOrderRef.current = [];
     setVisiblePageIds([]);
     setVisibleCompactThumbnailIds([]);
-    setHydratedPageIds([]);
   }, [documentId]);
 
   useEffect(() => {
@@ -1056,31 +1034,6 @@ export function EditorPage() {
       });
     });
   }, [activePageId, loading, pageStructureKey]);
-
-  function rememberHydratedPages(nextPageIds: string[]): void {
-    const currentBundle = bundleRef.current;
-    if (!currentBundle || nextPageIds.length === 0) {
-      return;
-    }
-
-    const validPageIdSet = new Set(currentBundle.pages.map((page) => page.id));
-    const dedupedTargets = [...new Set(nextPageIds.filter((pageId) => validPageIdSet.has(pageId)))];
-    if (dedupedTargets.length === 0) {
-      return;
-    }
-
-    const remaining = hydratedPageOrderRef.current.filter(
-      (pageId) => validPageIdSet.has(pageId) && !dedupedTargets.includes(pageId)
-    );
-    const nextOrder = [...remaining, ...dedupedTargets].slice(-HYDRATED_PAGE_LIMIT);
-
-    hydratedPageOrderRef.current = nextOrder;
-    setHydratedPageIds((current) =>
-      current.length === nextOrder.length && current.every((pageId, index) => pageId === nextOrder[index])
-        ? current
-        : nextOrder
-    );
-  }
 
   useEffect(() => {
     if (!isCompactLayout) {
@@ -1519,137 +1472,6 @@ export function EditorPage() {
   }, [documentId, pageStructureKey]);
 
   useEffect(() => {
-    if (!bundle || bundle.pages.length === 0) {
-      return;
-    }
-
-    const visiblePageIdSet = new Set(visiblePageIds);
-    const visiblePositions = bundle.pages
-      .filter((page) => visiblePageIdSet.has(page.id))
-      .map((page) => page.position);
-    const anchorPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
-    if (!anchorPage) {
-      return;
-    }
-
-    const minPosition = visiblePositions.length ? Math.min(...visiblePositions) : anchorPage.position;
-    const maxPosition = visiblePositions.length ? Math.max(...visiblePositions) : anchorPage.position;
-    const baseRadius = visiblePositions.length ? HYDRATED_RENDER_RADIUS : INITIAL_HYDRATE_RADIUS;
-
-    // Bias hydration toward scroll direction for smoother fast scrolling
-    const velocity = scrollVelocityRef.current;
-    const scrollDir = velocity > 0.15 ? 1 : velocity < -0.15 ? -1 : 0;
-    const forwardBias = scrollDir !== 0 ? 3 : 0;
-    const backwardPenalty = scrollDir !== 0 ? 2 : 0;
-
-    rememberHydratedPages(
-      bundle.pages
-        .filter((page) => {
-          if (scrollDir > 0) {
-            return page.position >= minPosition - (baseRadius - backwardPenalty) && page.position <= maxPosition + (baseRadius + forwardBias);
-          }
-          if (scrollDir < 0) {
-            return page.position >= minPosition - (baseRadius + forwardBias) && page.position <= maxPosition + (baseRadius - backwardPenalty);
-          }
-          return page.position >= minPosition - baseRadius && page.position <= maxPosition + baseRadius;
-        })
-        .map((page) => page.id)
-    );
-  }, [activePageId, bundle, pageStructureKey, visiblePageIds]);
-
-  useEffect(() => {
-    if (!bundle) {
-      return;
-    }
-
-    let cancelled = false;
-    const deferredTimeouts: number[] = [];
-    const deferredIdleCallbacks: number[] = [];
-
-    // Debounce prefetch to avoid firing a burst of renders on every scroll tick
-    const prefetchTimer = window.setTimeout(() => {
-      if (cancelled || touchScrollActiveRef.current) {
-        return;
-      }
-
-      const currentPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
-      if (!currentPage) {
-        return;
-      }
-
-      const visiblePageIdSet = new Set(visiblePageIds);
-      const warmPages = bundle.pages.filter(
-        (page) =>
-          page.kind === "pdf" &&
-          page.sourceFileId &&
-          Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS
-      );
-
-      const localFileMap = new Map(bundle!.files.map((f) => [f.id, f]));
-
-      function warmPage(page: PageRecord): void {
-        if (cancelled || touchScrollActiveRef.current) {
-          return;
-        }
-
-        const sourceFile = page.sourceFileId ? localFileMap.get(page.sourceFileId) : undefined;
-        if (!sourceFile) {
-          return;
-        }
-
-        const thumbnailPreviewUrl = getThumbnailPreviewUrl(sourceFile.id, page.sourcePageIndex);
-        void preloadPreviewImage(thumbnailPreviewUrl);
-
-        const shouldWarmPdfPage =
-          visiblePageIdSet.has(page.id) ||
-          Math.abs(page.position - currentPage.position) <= 1;
-
-        if (shouldWarmPdfPage) {
-          loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
-            // Best-effort warm cache only.
-          });
-        }
-      }
-
-      // Urgent: pages within 2 positions — warm immediately
-      const urgent: PageRecord[] = [];
-      const deferred: PageRecord[] = [];
-      for (const page of warmPages) {
-        if (Math.abs(page.position - currentPage.position) <= 2) {
-          urgent.push(page);
-        } else {
-          deferred.push(page);
-        }
-      }
-
-      urgent.forEach(warmPage);
-
-      // Deferred: warm during idle time to avoid blocking scroll
-      deferred.forEach((page, i) => {
-        if (typeof requestIdleCallback === "function") {
-          const idleId = requestIdleCallback(
-            () => warmPage(page),
-            { timeout: 700 + i * 40 }
-          );
-          deferredIdleCallbacks.push(idleId);
-        } else {
-          const timeoutId = window.setTimeout(() => warmPage(page), 90 * (i + 1));
-          deferredTimeouts.push(timeoutId);
-        }
-      });
-    }, 200);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(prefetchTimer);
-      deferredTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
-      if (typeof window.cancelIdleCallback === "function") {
-        deferredIdleCallbacks.forEach((idleId) => window.cancelIdleCallback(idleId));
-      }
-    };
-  }, [activePageId, fileStructureKey, pageStructureKey, visiblePageIds]);
-
-  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
       const target = event.target as HTMLElement | null;
       const isTypingTarget =
@@ -1769,24 +1591,12 @@ export function EditorPage() {
   const renderedPageIdSet = useMemo(() => {
     if (!bundlePages.length) return new Set<string>();
     const visibleSet = new Set(visiblePageIds);
-
-    let minPos = activePage?.position ?? bundlePages[0]?.position ?? 1;
-    let maxPos = minPos;
-    for (const page of bundlePages) {
-      if (visibleSet.has(page.id)) {
-        if (page.position < minPos) minPos = page.position;
-        if (page.position > maxPos) maxPos = page.position;
-      }
-    }
-
     const result = new Set<string>();
-    for (const page of bundlePages) {
-      if (
-        visibleSet.has(page.id) ||
-        (page.position >= minPos - RENDER_AHEAD_RADIUS && page.position <= maxPos + RENDER_AHEAD_RADIUS)
-      ) {
-        result.add(page.id);
-      }
+    if (activePage) {
+      result.add(activePage.id);
+    }
+    for (const pageId of visibleSet) {
+      result.add(pageId);
     }
     return result;
   }, [activePage, bundlePages, visiblePageIds]);
@@ -2524,15 +2334,13 @@ export function EditorPage() {
                   ) : (
                     <div className="page-stage-shell">
                       <div
-                        className="page-stage"
+                        className="page-stage page-stage-placeholder"
                         style={{
                           width: `${pageRenderMetrics.stageWidth}px`,
                           height: `${pageRenderMetrics.stageHeight}px`
                         }}
                       >
-                        <div className="page-fallback page-skeleton">
-                          <span>Page {page.position}</span>
-                        </div>
+                        <div aria-hidden="true" className="page-fallback page-skeleton" />
                       </div>
                     </div>
                   )}

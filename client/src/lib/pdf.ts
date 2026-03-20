@@ -4,12 +4,11 @@ GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", i
 
 const pdfCache = new Map<string, Promise<PDFDocumentProxy>>();
 const pdfPageCache = new Map<string, Map<number, Promise<PDFPageProxy>>>();
-const previewImageWarmCache = new Map<string, Promise<void>>();
 const PREVIEW_WIDTH_BUCKETS = [240, 1000, 1400];
 
-// Limits concurrent PDF page renders to prevent worker thread saturation
-// which causes the main thread to stall (scroll freeze).
-const MAX_CONCURRENT_RENDERS = 2;
+// Serialize full-page PDF rasterization. iPad Safari is much smoother when
+// we avoid stacking multiple expensive canvas renders at the same time.
+const MAX_CONCURRENT_RENDERS = 1;
 let activeRenders = 0;
 const renderQueue: Array<{ resolve: () => void }> = [];
 
@@ -215,30 +214,6 @@ export function getCachedPageSnapshot(key: string): HTMLCanvasElement | undefine
 
 export function storePageSnapshot(key: string, sourceCanvas: HTMLCanvasElement): void {
   pageSnapshotCache.set(key, sourceCanvas);
-}
-
-export function preloadPreviewImage(url: string): Promise<void> {
-  if (!url || typeof Image === "undefined") {
-    return Promise.resolve();
-  }
-
-  const existingTask = previewImageWarmCache.get(url);
-  if (existingTask) {
-    return existingTask;
-  }
-
-  const task = new Promise<void>((resolve) => {
-    const image = new Image();
-    image.decoding = "async";
-    image.onload = () => resolve();
-    image.onerror = () => resolve();
-    image.src = url;
-  }).finally(() => {
-    previewImageWarmCache.delete(url);
-  });
-
-  previewImageWarmCache.set(url, task);
-  return task;
 }
 
 export function getCachedThumbnailSnapshot(key: string): HTMLCanvasElement | undefined {

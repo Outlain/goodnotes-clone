@@ -287,6 +287,12 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
+.page-stage-placeholder {
+  box-shadow: none;
+  border: 1px solid rgba(32, 41, 57, 0.08);
+  background: #fffdf8;
+}
+
 .page-paper,
 .page-preview-image,
 .pdf-canvas,
@@ -306,14 +312,9 @@ a {
 }
 
 .page-skeleton {
-  background: linear-gradient(90deg, #fffdf7 25%, #f5f0e8 50%, #fffdf7 75%);
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.5s ease-in-out infinite;
-}
-
-@keyframes skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  background:
+    linear-gradient(180deg, rgba(255, 253, 247, 0.96), rgba(250, 245, 236, 0.92));
+  border: 1px solid rgba(32, 41, 57, 0.05);
 }
 
 .page-paper {
