@@ -1308,6 +1308,7 @@ a {
     border: 1px solid rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(24px);
     box-shadow: 0 24px 48px rgba(11, 18, 27, 0.3);
+    transition: top 0.3s ease;
   }
 
 .compact-tool-dock .save-pill {
@@ -1351,43 +1352,48 @@ a {
   }
 }
 
-/* ── Compact header slide-away ───────── */
+/* ── Compact header slide-away (top nav only, toolbar stays) ───────── */
 
 .compact-editor-header {
-  transition: transform 0.3s ease, opacity 0.3s ease;
+  transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.3s ease, margin 0.3s ease;
+  overflow: hidden;
+  max-height: 80px;
 }
 
 .compact-editor-header.compact-header-hidden {
-  transform: translateY(-120%);
+  max-height: 0;
   opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin: 0;
+  border-color: transparent;
   pointer-events: none;
 }
 
-.compact-tool-dock {
-  transition: transform 0.3s ease, opacity 0.3s ease;
-}
-
-.compact-tool-dock.compact-header-hidden {
-  transform: translateX(-50%) translateY(-200%);
-  opacity: 0;
-  pointer-events: none;
-}
-
-@media (max-width: 800px) {
-  .compact-tool-dock.compact-header-hidden {
-    transform: translateY(-200%);
-  }
+.compact-dock-top {
+  top: 0.75rem;
+  transition: top 0.3s ease;
 }
 
 .compact-page-panel-full {
-  padding-top: 0.9rem !important;
+  padding-top: 3.75rem !important;
+}
+
+@media (max-width: 800px) {
+  .compact-dock-top {
+    top: 0.75rem;
+  }
+
+  .compact-page-panel-full {
+    padding-top: 3.5rem !important;
+  }
 }
 
 .compact-swipe-hint {
   position: absolute;
-  top: 1rem;
+  top: 0.75rem;
   right: 0.75rem;
-  z-index: 5;
+  z-index: 7;
   width: 36px;
   height: 36px;
   border-radius: 50%;

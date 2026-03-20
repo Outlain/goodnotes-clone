@@ -893,7 +893,7 @@ export function EditorPage() {
         touchScrollEndTimerRef.current = null;
         setTouchScrollActive(false);
         scrollVelocityRef.current = 0;
-      }, 140);
+      }, 300);
     };
 
     const trackScrollVelocity = () => {
@@ -1457,73 +1457,69 @@ export function EditorPage() {
       return;
     }
 
-    const currentPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
-    if (!currentPage) {
-      return;
-    }
-
-    const hydratedPageIdSet = new Set(hydratedPageIds);
-    const warmPages = bundle.pages.filter(
-      (page) =>
-        page.kind === "pdf" &&
-        page.sourceFileId &&
-        (hydratedPageIdSet.has(page.id) || Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS)
-    );
-
-    function warmPage(page: PageRecord): void {
-      const sourceFile = bundle!.files.find((file) => file.id === page.sourceFileId);
-      if (!sourceFile) {
+    // Debounce prefetch to avoid firing a burst of renders on every scroll tick
+    const prefetchTimer = window.setTimeout(() => {
+      const currentPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
+      if (!currentPage) {
         return;
       }
 
-      const pagePreviewUrl = getPagePreviewUrl(sourceFile.id, page.sourcePageIndex, getPageRenderMetrics(page).stageWidth);
-      const thumbnailPreviewUrl = getThumbnailPreviewUrl(sourceFile.id, page.sourcePageIndex);
-
-      void preloadPreviewImage(pagePreviewUrl);
-      void preloadPreviewImage(thumbnailPreviewUrl);
-      loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
-        // Best-effort warm cache only.
-      });
-      void prewarmPdfPagePreview(
-        sourceFile.url,
-        (page.sourcePageIndex ?? 0) + 1,
-        page.width,
-        page.height,
-        sourceFile.size
+      const hydratedPageIdSet = new Set(hydratedPageIds);
+      const warmPages = bundle.pages.filter(
+        (page) =>
+          page.kind === "pdf" &&
+          page.sourceFileId &&
+          (hydratedPageIdSet.has(page.id) || Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS)
       );
-    }
 
-    // Urgent: pages within 2 positions — warm immediately
-    const urgent: PageRecord[] = [];
-    const deferred: PageRecord[] = [];
-    for (const page of warmPages) {
-      if (Math.abs(page.position - currentPage.position) <= 2) {
-        urgent.push(page);
-      } else {
-        deferred.push(page);
+      function warmPage(page: PageRecord): void {
+        const sourceFile = bundle!.files.find((file) => file.id === page.sourceFileId);
+        if (!sourceFile) {
+          return;
+        }
+
+        const pagePreviewUrl = getPagePreviewUrl(sourceFile.id, page.sourcePageIndex, getPageRenderMetrics(page).stageWidth);
+        const thumbnailPreviewUrl = getThumbnailPreviewUrl(sourceFile.id, page.sourcePageIndex);
+
+        void preloadPreviewImage(pagePreviewUrl);
+        void preloadPreviewImage(thumbnailPreviewUrl);
+        loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
+          // Best-effort warm cache only.
+        });
+        void prewarmPdfPagePreview(
+          sourceFile.url,
+          (page.sourcePageIndex ?? 0) + 1,
+          page.width,
+          page.height,
+          sourceFile.size
+        );
       }
-    }
 
-    urgent.forEach(warmPage);
-
-    // Deferred: warm during idle time to avoid blocking scroll
-    const idleIds: number[] = [];
-    deferred.forEach((page, i) => {
-      if (typeof requestIdleCallback === "function") {
-        idleIds.push(requestIdleCallback(() => warmPage(page)));
-      } else {
-        idleIds.push(window.setTimeout(() => warmPage(page), 50 * (i + 1)) as unknown as number);
-      }
-    });
-
-    return () => {
-      idleIds.forEach((id) => {
-        if (typeof cancelIdleCallback === "function") {
-          cancelIdleCallback(id);
+      // Urgent: pages within 2 positions — warm immediately
+      const urgent: PageRecord[] = [];
+      const deferred: PageRecord[] = [];
+      for (const page of warmPages) {
+        if (Math.abs(page.position - currentPage.position) <= 2) {
+          urgent.push(page);
         } else {
-          clearTimeout(id);
+          deferred.push(page);
+        }
+      }
+
+      urgent.forEach(warmPage);
+
+      // Deferred: warm during idle time to avoid blocking scroll
+      deferred.forEach((page, i) => {
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(() => warmPage(page));
+        } else {
+          window.setTimeout(() => warmPage(page), 50 * (i + 1));
         }
       });
+    }, 200);
+
+    return () => {
+      window.clearTimeout(prefetchTimer);
     };
   }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey]);
 
@@ -2008,7 +2004,7 @@ export function EditorPage() {
       </header>
 
       {isCompactLayout ? (
-        <section className={`compact-tool-dock ${!compactHeaderVisible ? "compact-header-hidden" : ""}`}>
+        <section className={`compact-tool-dock ${!compactHeaderVisible ? "compact-dock-top" : ""}`}>
           <div className="compact-tool-scroll">
             <button aria-label="Undo" className="compact-tool-button" disabled={!canUndo} onClick={undoPageChange} type="button">
               <IconGlyph name="undo" />

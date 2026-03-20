@@ -288,10 +288,17 @@ export async function prewarmPdfPagePreview(
 
     canvas.width = viewport.width;
     canvas.height = viewport.height;
-    await page.render({
-      canvasContext: context,
-      viewport
-    }).promise;
+
+    // Wait for a render slot so preview warmups don't saturate the worker
+    await acquireRenderSlot();
+    try {
+      await page.render({
+        canvasContext: context,
+        viewport
+      }).promise;
+    } finally {
+      releaseRenderSlot();
+    }
     page.cleanup();
     previewSnapshotCache.set(cacheKey, canvas);
   })();
