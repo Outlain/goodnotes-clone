@@ -8,7 +8,7 @@ import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
 import { loadPdfPage } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
-import type { Annotation, DocumentBundle, EditorTool, LineStyle, PageRecord, PageTemplate, PalmSettings } from "../types";
+import type { Annotation, DocumentBundle, EditorTool, LineStyle, PageRecord, PageTemplate, PalmSettings, ShapeKind } from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
@@ -34,7 +34,15 @@ const toolDefinitions: Array<{ value: EditorTool; label: string; icon: IconName 
   { value: "highlighter", label: "Highlighter", icon: "highlighter" },
   { value: "eraser", label: "Eraser", icon: "eraser" },
   { value: "text", label: "Text", icon: "text" },
+  { value: "shape", label: "Shapes", icon: "shape" },
   { value: "hand", label: "Hand", icon: "hand" }
+];
+
+const shapeDefinitions: Array<{ value: ShapeKind; label: string }> = [
+  { value: "rectangle", label: "Rectangle" },
+  { value: "ellipse", label: "Ellipse" },
+  { value: "triangle", label: "Triangle" },
+  { value: "diamond", label: "Diamond" }
 ];
 
 type IconName =
@@ -50,14 +58,24 @@ type IconName =
   | "undo"
   | "redo"
   | "search"
-  | "export";
+  | "export"
+  | "shape";
 
 function clampZoom(value: number): number {
   return Math.min(2.6, Math.max(0.45, Number(value.toFixed(2))));
 }
 
 function cloneAnnotations(annotations: Annotation[]): Annotation[] {
-  return annotations;
+  return annotations.map((annotation) => {
+    if (annotation.type === "stroke") {
+      return {
+        ...annotation,
+        points: annotation.points.map((point) => ({ ...point }))
+      };
+    }
+
+    return { ...annotation };
+  });
 }
 
 function IconGlyph({ name }: { name: IconName }) {
@@ -97,6 +115,13 @@ function IconGlyph({ name }: { name: IconName }) {
           <path d="M8.5 11V5.5a1.5 1.5 0 1 1 3 0V10" />
           <path d="M11.5 10V4.5a1.5 1.5 0 1 1 3 0V10" />
           <path d="M14.5 10V6a1.5 1.5 0 1 1 3 0v7.5c0 3.3-2.7 6-6 6H10a6 6 0 0 1-6-6v-2.5a1.5 1.5 0 1 1 3 0V13" />
+        </svg>
+      );
+    case "shape":
+      return (
+        <svg aria-hidden="true" className="ui-icon" viewBox="0 0 24 24">
+          <rect height="12" rx="2" width="12" x="6" y="6" />
+          <circle cx="18" cy="18" r="2" fill="currentColor" stroke="none" />
         </svg>
       );
     case "pages":
@@ -174,6 +199,7 @@ export function EditorPage() {
   const visibleRatiosRef = useRef(new Map<string, number>());
   const activePageIdRef = useRef("");
   const pendingActivePageIdRef = useRef<string | null>(null);
+  const pendingInitialFocusPageIdRef = useRef<string | null>(null);
   const touchScrollActiveRef = useRef(false);
   const touchScrollEndTimerRef = useRef<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -195,6 +221,8 @@ export function EditorPage() {
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [lineStyle, setLineStyle] = useState<LineStyle>("solid");
   const [eraserSize, setEraserSize] = useState(20);
+  const [shapeKind, setShapeKind] = useState<ShapeKind>("rectangle");
+  const [shapeFilled, setShapeFilled] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [insertTemplate, setInsertTemplate] = useState<PageTemplate>("ruled");
@@ -559,9 +587,17 @@ export function EditorPage() {
       bundleRef.current = nextBundle;
       setBundle(nextBundle);
       setTitleDraft(nextBundle.document.title);
-      setActivePageId((current) =>
-        nextBundle.pages.some((page) => page.id === current) ? current : nextBundle.pages[0]?.id || ""
-      );
+      const bookmarkPageId =
+        nextBundle.document.bookmarkPageId && nextBundle.pages.some((page) => page.id === nextBundle.document.bookmarkPageId)
+          ? nextBundle.document.bookmarkPageId
+          : null;
+      const nextActivePageId = nextBundle.pages.some((page) => page.id === activePageIdRef.current)
+        ? activePageIdRef.current
+        : bookmarkPageId ?? nextBundle.pages[0]?.id ?? "";
+      pendingInitialFocusPageIdRef.current =
+        !activePageIdRef.current && bookmarkPageId && bookmarkPageId === nextActivePageId ? nextActivePageId : null;
+      activePageIdRef.current = nextActivePageId;
+      setActivePageId(nextActivePageId);
       dirtyPagesRef.current.clear();
       pendingDraftPagesRef.current.clear();
       if (applicableDrafts.size > 0) {
@@ -778,6 +814,27 @@ export function EditorPage() {
   }, [activePageId]);
 
   useEffect(() => {
+    const pendingPageId = pendingInitialFocusPageIdRef.current;
+    if (!pendingPageId || loading) {
+      return;
+    }
+
+    const pageNode = pageElementRefs.current.get(pendingPageId);
+    if (!pageNode) {
+      return;
+    }
+
+    pendingInitialFocusPageIdRef.current = null;
+    window.requestAnimationFrame(() => {
+      pageNode.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+        behavior: "auto"
+      });
+    });
+  }, [activePageId, loading, pageStructureKey]);
+
+  useEffect(() => {
     if (!isCompactLayout) {
       setCompactActionsOpen(false);
       setCompactPagesOpen(false);
@@ -800,6 +857,19 @@ export function EditorPage() {
       setTitleDraft(nextBundle.document.title);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Could not rename document.");
+    }
+  }
+
+  async function updateDocumentBookmark(pageId: string | null): Promise<void> {
+    if (!bundle) {
+      return;
+    }
+
+    try {
+      const nextBundle = await api.setDocumentBookmark(bundle.document.id, pageId);
+      applyBundleUpdate(nextBundle);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not update bookmark.");
     }
   }
 
@@ -1281,6 +1351,10 @@ export function EditorPage() {
 
   const activePage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
   const activeFile = bundle.files.find((file) => file.id === activePage?.sourceFileId);
+  const bookmarkPage = bundle.document.bookmarkPageId
+    ? bundle.pages.find((page) => page.id === bundle.document.bookmarkPageId) ?? null
+    : null;
+  const isCurrentPageBookmarked = Boolean(activePage && bookmarkPage?.id === activePage.id);
   const historyEntry = activePageId ? historyRef.current.get(activePageId) : undefined;
   const canUndo = Boolean(historyEntry?.past.length);
   const canRedo = Boolean(historyEntry?.future.length);
@@ -1444,6 +1518,31 @@ export function EditorPage() {
           </div>
         </div>
       )}
+
+      <p className="eyebrow" style={{ marginTop: 16 }}>Bookmark</p>
+      <div className="stack-form">
+        <p className="muted-copy">
+          {bookmarkPage ? `Current bookmark: Page ${bookmarkPage.position}` : "No bookmark set yet."}
+        </p>
+        <button
+          className={`secondary-button ${isCurrentPageBookmarked ? "active" : ""}`}
+          disabled={!activePage || isCurrentPageBookmarked}
+          onClick={() => void updateDocumentBookmark(activePage?.id ?? null)}
+          type="button"
+        >
+          {isCurrentPageBookmarked ? "Current page is bookmarked" : "Bookmark this page"}
+        </button>
+        {bookmarkPage && !isCurrentPageBookmarked ? (
+          <button className="secondary-button" onClick={() => focusPage(bookmarkPage.id)} type="button">
+            Jump to bookmark
+          </button>
+        ) : null}
+        {bookmarkPage ? (
+          <button className="ghost-button" onClick={() => void updateDocumentBookmark(null)} type="button">
+            Clear bookmark
+          </button>
+        ) : null}
+      </div>
 
       <div className="stack-form" style={{ marginTop: 16 }}>
         <button className="ghost-button danger-button" onClick={deleteCurrentPage} type="button">
@@ -1655,6 +1754,63 @@ export function EditorPage() {
                   </button>
                 ))}
               </div>
+            ) : tool === "shape" ? (
+              <>
+                <div className="shape-kind-popup">
+                  {shapeDefinitions.map((shape) => (
+                    <button
+                      key={shape.value}
+                      className={`shape-kind-button ${shapeKind === shape.value ? "active" : ""}`}
+                      onClick={() => setShapeKind(shape.value)}
+                      type="button"
+                    >
+                      {shape.label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className={`compact-tool-button compact-fill-button ${shapeFilled ? "active" : ""}`}
+                  onClick={() => setShapeFilled((current) => !current)}
+                  type="button"
+                >
+                  {shapeFilled ? "Filled" : "Outline"}
+                </button>
+                <div className="stroke-size-popup">
+                  {penSizes.map((size) => (
+                    <button
+                      key={size}
+                      className={`stroke-size-button ${strokeWidth === size ? "active" : ""}`}
+                      onClick={() => setStrokeWidth(size)}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 28 28" width="24" height="24">
+                        <rect x="6" y="6" width="16" height="16" rx="4" fill="none" stroke="currentColor" strokeWidth={size} />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+                <div className="line-style-popup">
+                  {lineStyles.map((ls) => (
+                    <button
+                      key={ls.value}
+                      className={`line-style-button ${lineStyle === ls.value ? "active" : ""}`}
+                      onClick={() => setLineStyle(ls.value)}
+                      type="button"
+                      aria-label={ls.label}
+                    >
+                      <svg viewBox="0 0 32 8" width="32" height="8">
+                        <line
+                          x1="2" y1="4" x2="30" y2="4"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeDasharray={ls.value === "dashed" ? "6 4" : ls.value === "dotted" ? "0.5 5" : undefined}
+                        />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : (tool === "pen" || tool === "highlighter") ? (
               <>
                 <div className="stroke-size-popup">
@@ -1752,6 +1908,75 @@ export function EditorPage() {
                 ))}
               </div>
             </div>
+          ) : tool === "shape" ? (
+            <>
+              <div className="tool-row shape-options-row">
+                <label>Shape</label>
+                <div className="shape-kind-popup">
+                  {shapeDefinitions.map((shape) => (
+                    <button
+                      key={shape.value}
+                      className={`shape-kind-button ${shapeKind === shape.value ? "active" : ""}`}
+                      onClick={() => setShapeKind(shape.value)}
+                      type="button"
+                    >
+                      {shape.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="tool-row shape-options-row">
+                <label>Fill</label>
+                <button
+                  className={`ghost-button shape-fill-toggle ${shapeFilled ? "active" : ""}`}
+                  onClick={() => setShapeFilled((current) => !current)}
+                  type="button"
+                >
+                  {shapeFilled ? "Shaded" : "Outline only"}
+                </button>
+              </div>
+              <div className="tool-row stroke-options-row">
+                <label>Border</label>
+                <div className="stroke-size-popup">
+                  {penSizes.map((size) => (
+                    <button
+                      key={size}
+                      className={`stroke-size-button ${strokeWidth === size ? "active" : ""}`}
+                      onClick={() => setStrokeWidth(size)}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 28 28" width="28" height="28">
+                        <rect x="5" y="5" width="18" height="18" rx="4" fill="none" stroke="currentColor" strokeWidth={size} />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="tool-row line-style-row">
+                <label>Style</label>
+                <div className="line-style-popup">
+                  {lineStyles.map((ls) => (
+                    <button
+                      key={ls.value}
+                      className={`line-style-button ${lineStyle === ls.value ? "active" : ""}`}
+                      onClick={() => setLineStyle(ls.value)}
+                      type="button"
+                    >
+                      <svg viewBox="0 0 40 8" width="40" height="8">
+                        <line
+                          x1="2" y1="4" x2="38" y2="4"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeDasharray={ls.value === "dashed" ? "6 4" : ls.value === "dotted" ? "0.5 5" : undefined}
+                        />
+                      </svg>
+                      <span>{ls.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           ) : (tool === "pen" || tool === "highlighter") ? (
             <>
               <div className="tool-row stroke-options-row">
@@ -1830,11 +2055,13 @@ export function EditorPage() {
                       page={page}
                       palmSettings={palmSettings}
                       strokeWidth={strokeWidth}
-                      lineStyle={lineStyle}
-                      eraserSize={eraserSize}
-                      tool={tool}
-                      viewportWidthHint={pageRenderMetrics.viewportWidth}
-                      zoom={zoom}
+                    lineStyle={lineStyle}
+                    eraserSize={eraserSize}
+                    shapeKind={shapeKind}
+                    shapeFilled={shapeFilled}
+                    tool={tool}
+                    viewportWidthHint={pageRenderMetrics.viewportWidth}
+                    zoom={zoom}
                     />
                   ) : (
                     <div className="page-stage-shell">

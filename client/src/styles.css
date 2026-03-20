@@ -289,7 +289,8 @@ a {
 
 .page-paper,
 .pdf-canvas,
-.annotation-layer {
+.annotation-layer,
+.shape-selection-layer {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -324,6 +325,11 @@ a {
   touch-action: none;
 }
 
+.shape-selection-layer {
+  pointer-events: none;
+  z-index: 4;
+}
+
 .annotation-touch-scroll {
   touch-action: pan-x pan-y pinch-zoom;
 }
@@ -345,6 +351,19 @@ a {
   resize: none;
   outline: 1px dashed rgba(24, 49, 79, 0.18);
   touch-action: manipulation;
+}
+
+.shape-selection-outline {
+  fill: none;
+  stroke: rgba(37, 95, 133, 0.8);
+  stroke-width: 2.2;
+  stroke-dasharray: 8 6;
+}
+
+.shape-selection-handle {
+  fill: #fffdf8;
+  stroke: rgba(37, 95, 133, 0.85);
+  stroke-width: 2;
 }
 
 .text-annotation {
@@ -518,13 +537,45 @@ a {
 }
 
 .stroke-options-row,
-.line-style-row {
+.line-style-row,
+.shape-options-row {
   align-items: center;
 }
 
 .stroke-options-row label,
-.line-style-row label {
+.line-style-row label,
+.shape-options-row label {
   margin-right: 0.5rem;
+}
+
+.shape-kind-popup {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.shape-kind-button,
+.shape-fill-toggle {
+  border-radius: 999px;
+  border: 1px solid rgba(24, 49, 79, 0.12);
+  background: rgba(255, 252, 245, 0.82);
+  color: var(--ink);
+  padding: 0.5rem 0.85rem;
+  font: inherit;
+}
+
+.shape-kind-button.active,
+.shape-fill-toggle.active,
+.compact-fill-button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(37, 95, 133, 0.18);
+}
+
+.compact-fill-button {
+  width: auto;
+  padding: 0 0.9rem;
 }
 
 .page-fallback {

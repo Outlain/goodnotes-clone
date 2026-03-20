@@ -18,6 +18,7 @@ import {
   insertBlankPage,
   insertPdfPages,
   renameDocument,
+  setDocumentBookmark,
   toPublicDocumentBundle,
   appendPageAnnotations,
   updatePageAnnotations
@@ -43,6 +44,10 @@ const createNoteSchema = z.object({
 
 const renameSchema = z.object({
   title: z.string().trim().min(1).max(120)
+});
+
+const bookmarkSchema = z.object({
+  pageId: z.string().trim().min(1).nullable()
 });
 
 const insertPageSchema = z.object({
@@ -191,6 +196,20 @@ libraryRouter.patch("/documents/:documentId", (request, response) => {
 
   const documentId = String(request.params.documentId);
   response.json(toPublicDocumentBundle(renameDocument(documentId, parsed.data.title)));
+});
+
+libraryRouter.patch("/documents/:documentId/bookmark", (request, response) => {
+  const parsed = bookmarkSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ message: "Invalid bookmark payload." });
+    return;
+  }
+
+  const documentId = String(request.params.documentId);
+  const senderId = String(request.headers["x-sync-client-id"] ?? "");
+  const result = toPublicDocumentBundle(setDocumentBookmark(documentId, parsed.data.pageId));
+  broadcastDocumentChanged(documentId, senderId);
+  response.json(result);
 });
 
 libraryRouter.delete(

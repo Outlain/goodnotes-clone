@@ -6,6 +6,7 @@ import { HttpError } from "./http.js";
 
 export type PageTemplate = "blank" | "ruled" | "grid" | "dot";
 export type DocumentKind = "note" | "pdf";
+export type ShapeKind = "rectangle" | "ellipse" | "triangle" | "diamond";
 
 export interface AnnotationPoint {
   x: number;
@@ -37,7 +38,21 @@ export interface TextAnnotation {
   fontSize: number;
 }
 
-export type Annotation = StrokeAnnotation | TextAnnotation;
+export interface ShapeAnnotation {
+  id: string;
+  type: "shape";
+  shape: ShapeKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  strokeWidth: number;
+  lineStyle?: LineStyle;
+  fill: boolean;
+}
+
+export type Annotation = StrokeAnnotation | TextAnnotation | ShapeAnnotation;
 
 interface FolderRow {
   id: string;
@@ -54,6 +69,8 @@ interface DocumentRow {
   kind: DocumentKind;
   cover_color: string;
   page_count: number;
+  bookmark_page_id: string | null;
+  bookmark_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -101,6 +118,8 @@ export interface DocumentSummaryPayload {
   kind: DocumentKind;
   coverColor: string;
   pageCount: number;
+  bookmarkPageId: string | null;
+  bookmarkUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -165,6 +184,8 @@ db.exec(`
     kind TEXT NOT NULL,
     cover_color TEXT NOT NULL,
     page_count INTEGER NOT NULL DEFAULT 0,
+    bookmark_page_id TEXT,
+    bookmark_updated_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -202,6 +223,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pages_document_position ON pages (document_id, position);
 `);
 
+function ensureDocumentsColumn(columnName: string, definition: string): void {
+  const columns = db.prepare("PRAGMA table_info(documents)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === columnName)) {
+    db.exec(`ALTER TABLE documents ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+ensureDocumentsColumn("bookmark_page_id", "TEXT");
+ensureDocumentsColumn("bookmark_updated_at", "TEXT");
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -233,6 +264,8 @@ function mapDocument(row: DocumentRow): DocumentSummaryPayload {
     kind: row.kind,
     coverColor: row.cover_color,
     pageCount: row.page_count,
+    bookmarkPageId: row.bookmark_page_id,
+    bookmarkUpdatedAt: row.bookmark_updated_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -487,6 +520,28 @@ export function renameDocument(documentId: string, title: string): DocumentBundl
   return getDocumentBundle(documentId);
 }
 
+export function setDocumentBookmark(documentId: string, pageId: string | null): DocumentBundle {
+  const documentRow = getDocumentRow(documentId);
+  if (!documentRow) {
+    throw new HttpError(404, "Document not found.");
+  }
+
+  if (pageId) {
+    const pageRow = db.prepare("SELECT id FROM pages WHERE id = ? AND document_id = ?").get(pageId, documentId) as { id: string } | undefined;
+    if (!pageRow) {
+      throw new HttpError(404, "Bookmark page not found.");
+    }
+  }
+
+  db.prepare("UPDATE documents SET bookmark_page_id = ?, bookmark_updated_at = ? WHERE id = ?").run(
+    pageId,
+    pageId ? now() : null,
+    documentId
+  );
+
+  return getDocumentBundle(documentId);
+}
+
 export function deleteDocument(documentId: string): void {
   const documentRow = getDocumentRow(documentId);
   if (!documentRow) {
@@ -605,7 +660,25 @@ export function deletePage(pageId: string): DocumentBundle {
   }
 
   const transaction = db.transaction(() => {
+    const replacementPage = db
+      .prepare(
+        `
+          SELECT id
+          FROM pages
+          WHERE document_id = ? AND id <> ?
+          ORDER BY ABS(position - ?) ASC, position ASC
+          LIMIT 1
+        `
+      )
+      .get(pageRow.document_id, pageId, pageRow.position) as { id: string } | undefined;
+
     db.prepare("DELETE FROM pages WHERE id = ?").run(pageId);
+    db.prepare("UPDATE documents SET bookmark_page_id = ?, bookmark_updated_at = ? WHERE id = ? AND bookmark_page_id = ?").run(
+      replacementPage?.id ?? null,
+      replacementPage ? now() : null,
+      pageRow.document_id,
+      pageId
+    );
 
     // SQLite checks the UNIQUE(document_id, position) constraint row-by-row
     // during UPDATE, so a simple `position - 1` can collide if rows are

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import type { Annotation, DocumentBundle, PageTemplate } from "./db.js";
+import type { Annotation, DocumentBundle, LineStyle, PageTemplate, ShapeAnnotation, TextAnnotation } from "./db.js";
 
 interface ExtractedPdfPage {
   width: number;
@@ -26,6 +26,114 @@ function hexToRgb(hexColor: string): { red: number; green: number; blue: number 
     green: ((intValue >> 8) & 255) / 255,
     blue: (intValue & 255) / 255
   };
+}
+
+function dashPattern(style: LineStyle | undefined, width: number): number[] | undefined {
+  if (!style || style === "solid") {
+    return undefined;
+  }
+
+  if (style === "dashed") {
+    return [Math.max(2, width * 3), Math.max(2, width * 2)];
+  }
+
+  return [Math.max(1, width * 0.2), Math.max(2, width * 2.5)];
+}
+
+function strokeAndFillOptions(annotation: ShapeAnnotation) {
+  const color = hexToRgb(annotation.color);
+  return {
+    strokeColor: rgb(color.red, color.green, color.blue),
+    fillColor: rgb(color.red, color.green, color.blue),
+    dashArray: dashPattern(annotation.lineStyle, annotation.strokeWidth)
+  };
+}
+
+function drawPolygonShape(
+  pdfPage: import("pdf-lib").PDFPage,
+  annotation: ShapeAnnotation,
+  pageHeight: number
+): void {
+  const { x, y, width, height } = annotation;
+  const bottomY = pageHeight - y - height;
+  const topY = bottomY + height;
+  const centerX = x + width / 2;
+  const centerY = bottomY + height / 2;
+  const path =
+    annotation.shape === "triangle"
+      ? `M ${centerX} ${topY} L ${x + width} ${bottomY} L ${x} ${bottomY} Z`
+      : `M ${centerX} ${topY} L ${x + width} ${centerY} L ${centerX} ${bottomY} L ${x} ${centerY} Z`;
+  const { strokeColor, fillColor, dashArray } = strokeAndFillOptions(annotation);
+
+  pdfPage.drawSvgPath(path, {
+    color: annotation.fill ? fillColor : undefined,
+    opacity: annotation.fill ? 0.16 : undefined,
+    borderColor: strokeColor,
+    borderOpacity: 1,
+    borderWidth: clamp(annotation.strokeWidth, 1, 24),
+    borderDashArray: dashArray
+  });
+}
+
+function drawShapeAnnotation(
+  pdfPage: import("pdf-lib").PDFPage,
+  annotation: ShapeAnnotation,
+  pageHeight: number
+): void {
+  const { strokeColor, fillColor, dashArray } = strokeAndFillOptions(annotation);
+  const y = pageHeight - annotation.y - annotation.height;
+
+  if (annotation.shape === "rectangle") {
+    pdfPage.drawRectangle({
+      x: annotation.x,
+      y,
+      width: annotation.width,
+      height: annotation.height,
+      color: annotation.fill ? fillColor : undefined,
+      opacity: annotation.fill ? 0.16 : undefined,
+      borderColor: strokeColor,
+      borderOpacity: 1,
+      borderWidth: clamp(annotation.strokeWidth, 1, 24),
+      borderDashArray: dashArray
+    });
+    return;
+  }
+
+  if (annotation.shape === "ellipse") {
+    pdfPage.drawEllipse({
+      x: annotation.x + annotation.width / 2,
+      y: y + annotation.height / 2,
+      xScale: annotation.width / 2,
+      yScale: annotation.height / 2,
+      color: annotation.fill ? fillColor : undefined,
+      opacity: annotation.fill ? 0.16 : undefined,
+      borderColor: strokeColor,
+      borderOpacity: 1,
+      borderWidth: clamp(annotation.strokeWidth, 1, 24),
+      borderDashArray: dashArray
+    });
+    return;
+  }
+
+  drawPolygonShape(pdfPage, annotation, pageHeight);
+}
+
+function drawTextAnnotation(
+  pdfPage: import("pdf-lib").PDFPage,
+  annotation: TextAnnotation,
+  height: number,
+  helvetica: import("pdf-lib").PDFFont
+): void {
+  const color = hexToRgb(annotation.color);
+  pdfPage.drawText(annotation.text.split("\n").join("\n"), {
+    x: annotation.x,
+    y: height - annotation.y - annotation.fontSize,
+    font: helvetica,
+    size: annotation.fontSize,
+    maxWidth: annotation.width,
+    lineHeight: annotation.fontSize * 1.25,
+    color: rgb(color.red, color.green, color.blue)
+  });
 }
 
 function drawTemplate(page: import("pdf-lib").PDFPage, template: PageTemplate | null, width: number, height: number): void {
@@ -128,17 +236,14 @@ function drawAnnotations(
       return;
     }
 
-    const color = hexToRgb(annotation.color);
-    const lines = annotation.text.split("\n").join("\n");
-    pdfPage.drawText(lines, {
-      x: annotation.x,
-      y: height - annotation.y - annotation.fontSize,
-      font: helvetica,
-      size: annotation.fontSize,
-      maxWidth: annotation.width,
-      lineHeight: annotation.fontSize * 1.25,
-      color: rgb(color.red, color.green, color.blue)
-    });
+    if (annotation.type === "text") {
+      drawTextAnnotation(pdfPage, annotation, height, helvetica);
+      return;
+    }
+
+    if (annotation.type === "shape") {
+      drawShapeAnnotation(pdfPage, annotation, height);
+    }
   });
 }
 

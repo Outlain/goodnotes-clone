@@ -46,6 +46,15 @@ export function hitTestAnnotation(annotation: Annotation, x: number, y: number, 
     );
   }
 
+  if (annotation.type === "shape") {
+    return (
+      x + halfEraser >= annotation.x &&
+      x - halfEraser <= annotation.x + annotation.width &&
+      y + halfEraser >= annotation.y &&
+      y - halfEraser <= annotation.y + annotation.height
+    );
+  }
+
   if (annotation.points.length === 1) {
     const point = annotation.points[0];
     return Math.hypot(x - point.x, y - point.y) <= annotation.width / 2 + halfEraser;

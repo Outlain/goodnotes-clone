@@ -1,6 +1,7 @@
 export type PageTemplate = "blank" | "ruled" | "grid" | "dot";
 export type DocumentKind = "note" | "pdf";
-export type EditorTool = "pen" | "highlighter" | "eraser" | "text" | "hand";
+export type EditorTool = "pen" | "highlighter" | "eraser" | "text" | "shape" | "hand";
+export type ShapeKind = "rectangle" | "ellipse" | "triangle" | "diamond";
 
 export interface FolderRecord {
   id: string;
@@ -17,6 +18,8 @@ export interface DocumentSummary {
   kind: DocumentKind;
   coverColor: string;
   pageCount: number;
+  bookmarkPageId: string | null;
+  bookmarkUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -61,7 +64,21 @@ export interface TextAnnotation {
   fontSize: number;
 }
 
-export type Annotation = StrokeAnnotation | TextAnnotation;
+export interface ShapeAnnotation {
+  id: string;
+  type: "shape";
+  shape: ShapeKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  strokeWidth: number;
+  lineStyle?: LineStyle;
+  fill: boolean;
+}
+
+export type Annotation = StrokeAnnotation | TextAnnotation | ShapeAnnotation;
 
 export interface PageRecord {
   id: string;
@@ -99,4 +116,3 @@ export interface PalmSettings {
   stylusOnly: boolean;
   maxTouchArea: number;
 }
-

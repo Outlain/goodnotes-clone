@@ -1,7 +1,17 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 import { buildStrokePath, hitTestAnnotation } from "../lib/annotations";
-import type { Annotation, AnnotationPoint, EditorTool, LineStyle, PageRecord, PalmSettings, TextAnnotation } from "../types";
+import type {
+  Annotation,
+  AnnotationPoint,
+  EditorTool,
+  LineStyle,
+  PageRecord,
+  PalmSettings,
+  ShapeAnnotation,
+  ShapeKind,
+  TextAnnotation
+} from "../types";
 import { PdfPageLayer } from "./PdfPageLayer";
 
 interface EditorCanvasProps {
@@ -14,6 +24,8 @@ interface EditorCanvasProps {
   strokeWidth: number;
   lineStyle: LineStyle;
   eraserSize: number;
+  shapeKind: ShapeKind;
+  shapeFilled: boolean;
   palmSettings: PalmSettings;
   annotationRevision: number;
   onChange: (annotations: Annotation[]) => void;
@@ -37,6 +49,20 @@ interface PointerScrollState {
   velocityX: number;
   velocityY: number;
 }
+
+type ShapeHandle = "nw" | "ne" | "sw" | "se";
+
+interface ShapeInteractionState {
+  pointerId: number;
+  mode: "create" | "move" | "resize";
+  shapeId: string;
+  originPoint: AnnotationPoint;
+  initialShape: ShapeAnnotation;
+  handle?: ShapeHandle;
+}
+
+const MIN_SHAPE_SIZE = 12;
+const SHAPE_HANDLE_RADIUS = 10;
 
 function shouldIgnorePointer(event: ReactPointerEvent<SVGSVGElement>, palmSettings: PalmSettings): boolean {
   if (event.pointerType === "mouse") {
@@ -77,6 +103,67 @@ function lineDashArray(style: LineStyle | undefined, width: number): string | un
   return undefined;
 }
 
+function normalizeShapeRect(startX: number, startY: number, endX: number, endY: number) {
+  const width = Math.max(Math.abs(endX - startX), MIN_SHAPE_SIZE);
+  const height = Math.max(Math.abs(endY - startY), MIN_SHAPE_SIZE);
+  const x = endX >= startX ? startX : startX - width;
+  const y = endY >= startY ? startY : startY - height;
+  return { x, y, width, height };
+}
+
+function clampShapeToPage(shape: ShapeAnnotation, page: PageRecord): ShapeAnnotation {
+  const width = Math.max(MIN_SHAPE_SIZE, Math.min(shape.width, page.width));
+  const height = Math.max(MIN_SHAPE_SIZE, Math.min(shape.height, page.height));
+  const x = Math.max(0, Math.min(shape.x, page.width - width));
+  const y = Math.max(0, Math.min(shape.y, page.height - height));
+  return { ...shape, x, y, width, height };
+}
+
+function shapePoints(annotation: ShapeAnnotation): string {
+  const left = annotation.x;
+  const right = annotation.x + annotation.width;
+  const top = annotation.y;
+  const bottom = annotation.y + annotation.height;
+  const centerX = annotation.x + annotation.width / 2;
+  const centerY = annotation.y + annotation.height / 2;
+
+  switch (annotation.shape) {
+    case "triangle":
+      return `${centerX},${top} ${right},${bottom} ${left},${bottom}`;
+    case "diamond":
+      return `${centerX},${top} ${right},${centerY} ${centerX},${bottom} ${left},${centerY}`;
+    default:
+      return "";
+  }
+}
+
+function getShapeHandleCoordinates(annotation: ShapeAnnotation): Array<{ handle: ShapeHandle; x: number; y: number }> {
+  return [
+    { handle: "nw", x: annotation.x, y: annotation.y },
+    { handle: "ne", x: annotation.x + annotation.width, y: annotation.y },
+    { handle: "sw", x: annotation.x, y: annotation.y + annotation.height },
+    { handle: "se", x: annotation.x + annotation.width, y: annotation.y + annotation.height }
+  ];
+}
+
+function getShapeResizeHandle(annotation: ShapeAnnotation, x: number, y: number): ShapeHandle | null {
+  const match = getShapeHandleCoordinates(annotation).find(
+    (candidate) => Math.hypot(candidate.x - x, candidate.y - y) <= SHAPE_HANDLE_RADIUS
+  );
+  return match?.handle ?? null;
+}
+
+function findTopShapeAnnotation(annotations: Annotation[], x: number, y: number): ShapeAnnotation | null {
+  for (let index = annotations.length - 1; index >= 0; index -= 1) {
+    const annotation = annotations[index];
+    if (annotation?.type === "shape" && hitTestAnnotation(annotation, x, y, 0)) {
+      return annotation;
+    }
+  }
+
+  return null;
+}
+
 function shouldCaptureEditorGesture(
   event: ReactPointerEvent<SVGSVGElement>,
   tool: EditorTool,
@@ -95,6 +182,8 @@ function EditorCanvasInner({
   strokeWidth,
   lineStyle,
   eraserSize,
+  shapeKind,
+  shapeFilled,
   palmSettings,
   annotationRevision,
   onChange
@@ -107,6 +196,9 @@ function EditorCanvasInner({
   const erasingRef = useRef(false);
   const pointerScrollRef = useRef<PointerScrollState | null>(null);
   const momentumFrameRef = useRef<number | null>(null);
+  const shapeInteractionRef = useRef<ShapeInteractionState | null>(null);
+  const shapePreviewRef = useRef<ShapeAnnotation | null>(null);
+  const shapeRenderFrameRef = useRef<number | null>(null);
   const lastPenInteractionAtRef = useRef(0);
   const draftStrokeRef = useRef<Extract<Annotation, { type: "stroke" }> | null>(null);
   const draftRenderFrameRef = useRef<number | null>(null);
@@ -115,6 +207,8 @@ function EditorCanvasInner({
   const [availableWidth, setAvailableWidth] = useState(() => Math.max(0, viewportWidthHint ?? 0));
   const [localAnnotations, setLocalAnnotations] = useState<Annotation[]>(page.annotations);
   const [draftStroke, setDraftStroke] = useState<Extract<Annotation, { type: "stroke" }> | null>(null);
+  const [shapePreview, setShapePreview] = useState<ShapeAnnotation | null>(null);
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -126,6 +220,13 @@ function EditorCanvasInner({
       draftRenderFrameRef.current = null;
     }
     setDraftStroke(null);
+    shapePreviewRef.current = null;
+    if (shapeRenderFrameRef.current != null) {
+      window.cancelAnimationFrame(shapeRenderFrameRef.current);
+      shapeRenderFrameRef.current = null;
+    }
+    setShapePreview(null);
+    setSelectedShapeId(null);
     setEditingTextId(null);
     revisionRef.current = annotationRevision;
   }, [page.id]);
@@ -139,8 +240,11 @@ function EditorCanvasInner({
       revisionRef.current = annotationRevision;
       annotationsRef.current = page.annotations;
       setLocalAnnotations(page.annotations);
+      if (selectedShapeId && !page.annotations.some((annotation) => annotation.type === "shape" && annotation.id === selectedShapeId)) {
+        setSelectedShapeId(null);
+      }
     }
-  }, [annotationRevision, page.annotations]);
+  }, [annotationRevision, page.annotations, selectedShapeId]);
 
   useEffect(() => {
     if (!viewportWidthHint) {
@@ -184,8 +288,24 @@ function EditorCanvasInner({
       if (draftRenderFrameRef.current != null) {
         window.cancelAnimationFrame(draftRenderFrameRef.current);
       }
+      if (shapeRenderFrameRef.current != null) {
+        window.cancelAnimationFrame(shapeRenderFrameRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (tool !== "shape") {
+      shapeInteractionRef.current = null;
+      shapePreviewRef.current = null;
+      if (shapeRenderFrameRef.current != null) {
+        window.cancelAnimationFrame(shapeRenderFrameRef.current);
+        shapeRenderFrameRef.current = null;
+      }
+      setShapePreview(null);
+      setSelectedShapeId(null);
+    }
+  }, [tool]);
 
   // Defeat iPadOS Scribble — the handwriting-recognition feature intercepts
   // Apple Pencil pointer events at the OS level (WebKit bug #217430), causing
@@ -314,8 +434,32 @@ function EditorCanvasInner({
     });
   }
 
+  function scheduleShapePreviewRender(): void {
+    if (shapeRenderFrameRef.current != null) {
+      return;
+    }
+
+    shapeRenderFrameRef.current = window.requestAnimationFrame(() => {
+      shapeRenderFrameRef.current = null;
+      const currentShapePreview = shapePreviewRef.current;
+      setShapePreview(currentShapePreview ? { ...currentShapePreview } : null);
+    });
+  }
+
   function getPoint(event: ReactPointerEvent<SVGSVGElement>): PointLike {
     return pointFromClient(event.clientX, event.clientY, event.pressure || 0.5);
+  }
+
+  function getSelectedShapeAnnotation(): ShapeAnnotation | null {
+    const selectedShape = annotationsRef.current.find(
+      (annotation): annotation is ShapeAnnotation => annotation.type === "shape" && annotation.id === selectedShapeId
+    );
+
+    if (shapePreviewRef.current && shapePreviewRef.current.id === selectedShapeId) {
+      return shapePreviewRef.current;
+    }
+
+    return selectedShape ?? null;
   }
 
   function applyAnnotations(nextAnnotations: Annotation[]): void {
@@ -398,6 +542,94 @@ function EditorCanvasInner({
     setDraftStroke(null);
   }
 
+  function buildInteractiveShape(
+    interaction: ShapeInteractionState,
+    point: PointLike
+  ): ShapeAnnotation {
+    if (interaction.mode === "create") {
+      return clampShapeToPage(
+        {
+          ...interaction.initialShape,
+          ...normalizeShapeRect(interaction.originPoint.x, interaction.originPoint.y, point.x, point.y)
+        },
+        page
+      );
+    }
+
+    if (interaction.mode === "move") {
+      return clampShapeToPage(
+        {
+          ...interaction.initialShape,
+          x: interaction.initialShape.x + (point.x - interaction.originPoint.x),
+          y: interaction.initialShape.y + (point.y - interaction.originPoint.y)
+        },
+        page
+      );
+    }
+
+    const initialShape = interaction.initialShape;
+    const oppositeX = interaction.handle === "nw" || interaction.handle === "sw" ? initialShape.x + initialShape.width : initialShape.x;
+    const oppositeY = interaction.handle === "nw" || interaction.handle === "ne" ? initialShape.y + initialShape.height : initialShape.y;
+
+    return clampShapeToPage(
+      {
+        ...initialShape,
+        ...normalizeShapeRect(oppositeX, oppositeY, point.x, point.y)
+      },
+      page
+    );
+  }
+
+  function commitShapePreview(): void {
+    const interaction = shapeInteractionRef.current;
+    const nextShape = shapePreviewRef.current;
+    shapeInteractionRef.current = null;
+
+    if (shapeRenderFrameRef.current != null) {
+      window.cancelAnimationFrame(shapeRenderFrameRef.current);
+      shapeRenderFrameRef.current = null;
+    }
+
+    shapePreviewRef.current = null;
+    setShapePreview(null);
+
+    if (!interaction || !nextShape) {
+      return;
+    }
+
+    if (interaction.mode === "create") {
+      if (nextShape.width < MIN_SHAPE_SIZE && nextShape.height < MIN_SHAPE_SIZE) {
+        setSelectedShapeId(null);
+        return;
+      }
+
+      applyAnnotations([...annotationsRef.current, nextShape]);
+      setSelectedShapeId(nextShape.id);
+      return;
+    }
+
+    const didChange =
+      nextShape.x !== interaction.initialShape.x ||
+      nextShape.y !== interaction.initialShape.y ||
+      nextShape.width !== interaction.initialShape.width ||
+      nextShape.height !== interaction.initialShape.height ||
+      nextShape.fill !== interaction.initialShape.fill ||
+      nextShape.color !== interaction.initialShape.color ||
+      nextShape.strokeWidth !== interaction.initialShape.strokeWidth ||
+      nextShape.lineStyle !== interaction.initialShape.lineStyle;
+
+    setSelectedShapeId(nextShape.id);
+    if (!didChange) {
+      return;
+    }
+
+    applyAnnotations(
+      annotationsRef.current.map((annotation) =>
+        annotation.id === nextShape.id ? nextShape : annotation
+      )
+    );
+  }
+
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>): void {
     if (shouldScrollWithTouchPointer(event)) {
       const scrollContainer = getScrollContainer();
@@ -452,6 +684,68 @@ function EditorCanvasInner({
       return;
     }
 
+    if (tool === "shape") {
+      const selectedShape = getSelectedShapeAnnotation();
+      const resizeHandle = selectedShape ? getShapeResizeHandle(selectedShape, point.x, point.y) : null;
+
+      if (resizeHandle && selectedShape) {
+        svgRef.current?.setPointerCapture(event.pointerId);
+        shapeInteractionRef.current = {
+          pointerId: event.pointerId,
+          mode: "resize",
+          shapeId: selectedShape.id,
+          originPoint: point,
+          initialShape: { ...selectedShape },
+          handle: resizeHandle
+        };
+        shapePreviewRef.current = { ...selectedShape };
+        setShapePreview({ ...selectedShape });
+        return;
+      }
+
+      const hitShape = findTopShapeAnnotation(annotationsRef.current, point.x, point.y);
+      if (hitShape) {
+        svgRef.current?.setPointerCapture(event.pointerId);
+        setSelectedShapeId(hitShape.id);
+        shapeInteractionRef.current = {
+          pointerId: event.pointerId,
+          mode: "move",
+          shapeId: hitShape.id,
+          originPoint: point,
+          initialShape: { ...hitShape }
+        };
+        shapePreviewRef.current = { ...hitShape };
+        setShapePreview({ ...hitShape });
+        return;
+      }
+
+      const nextShape: ShapeAnnotation = {
+        id: createId(),
+        type: "shape",
+        shape: shapeKind,
+        x: point.x,
+        y: point.y,
+        width: MIN_SHAPE_SIZE,
+        height: MIN_SHAPE_SIZE,
+        color,
+        strokeWidth,
+        lineStyle: lineStyle !== "solid" ? lineStyle : undefined,
+        fill: shapeFilled
+      };
+      svgRef.current?.setPointerCapture(event.pointerId);
+      setSelectedShapeId(nextShape.id);
+      shapeInteractionRef.current = {
+        pointerId: event.pointerId,
+        mode: "create",
+        shapeId: nextShape.id,
+        originPoint: point,
+        initialShape: nextShape
+      };
+      shapePreviewRef.current = nextShape;
+      setShapePreview(nextShape);
+      return;
+    }
+
     if (tool === "hand") {
       return;
     }
@@ -476,6 +770,14 @@ function EditorCanvasInner({
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (shapeInteractionRef.current?.pointerId === event.pointerId) {
+      event.preventDefault();
+      const nextShape = buildInteractiveShape(shapeInteractionRef.current, getPoint(event));
+      shapePreviewRef.current = nextShape;
+      scheduleShapePreviewRender();
+      return;
+    }
+
     if (pointerScrollRef.current?.pointerId === event.pointerId) {
       const scrollContainer = getScrollContainer();
       if (!scrollContainer) {
@@ -517,6 +819,21 @@ function EditorCanvasInner({
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (shapeInteractionRef.current?.pointerId === event.pointerId) {
+      event.preventDefault();
+      if (event.pointerType === "pen") {
+        lastPenInteractionAtRef.current = performance.now();
+      }
+      if (shapePreviewRef.current) {
+        shapePreviewRef.current = buildInteractiveShape(shapeInteractionRef.current, getPoint(event));
+      }
+      if (svgRef.current?.hasPointerCapture(event.pointerId)) {
+        svgRef.current.releasePointerCapture(event.pointerId);
+      }
+      commitShapePreview();
+      return;
+    }
+
     if (pointerScrollRef.current?.pointerId === event.pointerId) {
       const scrollContainer = getScrollContainer();
       event.preventDefault();
@@ -587,6 +904,20 @@ function EditorCanvasInner({
 
   const fitScale = availableWidth > 0 ? availableWidth / page.width : 1;
   const renderZoom = Math.max(0.2, fitScale * zoom);
+  const renderedAnnotations = shapePreview
+    ? (() => {
+        const replaced = localAnnotations.map((annotation) => (annotation.id === shapePreview.id ? shapePreview : annotation));
+        if (replaced.some((annotation) => annotation.id === shapePreview.id)) {
+          return replaced;
+        }
+        return [...replaced, shapePreview];
+      })()
+    : localAnnotations;
+  const selectedShape = tool === "shape"
+    ? renderedAnnotations.find(
+        (annotation): annotation is ShapeAnnotation => annotation.type === "shape" && annotation.id === selectedShapeId
+      ) ?? null
+    : null;
   const annotationLayerClassName = [
     "annotation-layer",
     tool === "hand" ? "annotation-hand" : ""
@@ -631,21 +962,54 @@ function EditorCanvasInner({
           onPointerUp={handlePointerUp}
           onPointerLeave={(event) => { handlePointerUp(event); hideEraserCursor(); }}
         >
-          {localAnnotations.map((annotation) =>
-            annotation.type === "stroke" ? (
-              <path
-                key={annotation.id}
-                d={buildStrokePath(annotation)}
-                fill="none"
-                stroke={annotation.color}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeOpacity={annotation.tool === "highlighter" ? 0.22 : 1}
-                strokeWidth={annotation.width}
-                strokeDasharray={lineDashArray(annotation.lineStyle, annotation.width)}
-              />
-            ) : null
-          )}
+          {renderedAnnotations.map((annotation) => {
+            if (annotation.type === "stroke") {
+              return (
+                <path
+                  key={annotation.id}
+                  d={buildStrokePath(annotation)}
+                  fill="none"
+                  stroke={annotation.color}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeOpacity={annotation.tool === "highlighter" ? 0.22 : 1}
+                  strokeWidth={annotation.width}
+                  strokeDasharray={lineDashArray(annotation.lineStyle, annotation.width)}
+                />
+              );
+            }
+
+            if (annotation.type === "shape") {
+              const sharedProps = {
+                key: annotation.id,
+                fill: annotation.fill ? annotation.color : "transparent",
+                fillOpacity: annotation.fill ? 0.16 : 0,
+                stroke: annotation.color,
+                strokeWidth: annotation.strokeWidth,
+                strokeDasharray: lineDashArray(annotation.lineStyle, annotation.strokeWidth)
+              };
+
+              if (annotation.shape === "rectangle") {
+                return <rect {...sharedProps} x={annotation.x} y={annotation.y} width={annotation.width} height={annotation.height} rx={10} />;
+              }
+
+              if (annotation.shape === "ellipse") {
+                return (
+                  <ellipse
+                    {...sharedProps}
+                    cx={annotation.x + annotation.width / 2}
+                    cy={annotation.y + annotation.height / 2}
+                    rx={annotation.width / 2}
+                    ry={annotation.height / 2}
+                  />
+                );
+              }
+
+              return <polygon {...sharedProps} points={shapePoints(annotation)} />;
+            }
+
+            return null;
+          })}
 
           {draftStroke ? (
             <path
@@ -676,7 +1040,29 @@ function EditorCanvasInner({
           )}
         </svg>
 
-        {localAnnotations.map((annotation) => {
+        {selectedShape ? (
+          <svg className="shape-selection-layer" viewBox={`0 0 ${page.width} ${page.height}`}>
+            <rect
+              className="shape-selection-outline"
+              x={selectedShape.x}
+              y={selectedShape.y}
+              width={selectedShape.width}
+              height={selectedShape.height}
+              rx={selectedShape.shape === "ellipse" ? selectedShape.width / 2 : 10}
+            />
+            {getShapeHandleCoordinates(selectedShape).map((handle) => (
+              <circle
+                key={handle.handle}
+                className="shape-selection-handle"
+                cx={handle.x}
+                cy={handle.y}
+                r={SHAPE_HANDLE_RADIUS / 2}
+              />
+            ))}
+          </svg>
+        ) : null}
+
+        {renderedAnnotations.map((annotation) => {
           if (annotation.type !== "text") {
             return null;
           }
@@ -743,6 +1129,8 @@ export const EditorCanvas = memo(EditorCanvasInner, (previousProps, nextProps) =
     previousProps.strokeWidth === nextProps.strokeWidth &&
     previousProps.lineStyle === nextProps.lineStyle &&
     previousProps.eraserSize === nextProps.eraserSize &&
+    previousProps.shapeKind === nextProps.shapeKind &&
+    previousProps.shapeFilled === nextProps.shapeFilled &&
     previousProps.palmSettings.stylusOnly === nextProps.palmSettings.stylusOnly &&
     previousProps.palmSettings.maxTouchArea === nextProps.palmSettings.maxTouchArea
   );

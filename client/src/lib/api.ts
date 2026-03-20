@@ -76,6 +76,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ title })
     }),
+  setDocumentBookmark: (documentId: string, pageId: string | null) =>
+    request<DocumentBundle>(`/api/documents/${documentId}/bookmark`, {
+      method: "PATCH",
+      body: JSON.stringify({ pageId })
+    }),
   insertBlankPage: (documentId: string, payload: { anchorPageId?: string; placement: "before" | "after"; template: PageTemplate }) =>
     request<DocumentBundle>(`/api/documents/${documentId}/pages/insert`, {
       method: "POST",
@@ -107,4 +112,3 @@ export const api = {
 };
 
 export { ApiError };
-
