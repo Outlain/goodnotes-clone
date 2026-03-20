@@ -5,7 +5,7 @@ import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
 import { collectAnnotationText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
-import { loadPdfPage, preloadPreviewImage, prewarmPdfPagePreview, resolvePreviewWidthBucket, scaleCachesForDocument } from "../lib/pdf";
+import { loadPdfPage, preloadPreviewImage, resolvePreviewWidthBucket, scaleCachesForDocument } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
 import type {
@@ -267,12 +267,16 @@ export function EditorPage() {
   const pendingInitialFocusPageIdRef = useRef<string | null>(null);
   const touchScrollActiveRef = useRef(false);
   const touchScrollEndTimerRef = useRef<number | null>(null);
+  const scrollSettledIdleRef = useRef<number | null>(null);
+  const scrollSettledTimeoutRef = useRef<number | null>(null);
   const scrollVelocityRef = useRef(0);
   const lastScrollTopRef = useRef(0);
   const lastScrollTimeRef = useRef(0);
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
   const bundleFlushTimerRef = useRef<number | null>(null);
+  const bundleFlushIdleRef = useRef<number | null>(null);
+  const bundleFlushTimeoutRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const saveAgainRef = useRef(false);
   const pendingDraftPagesRef = useRef(new Set<string>());
@@ -351,6 +355,50 @@ export function EditorPage() {
       window.clearTimeout(bundleFlushTimerRef.current);
       bundleFlushTimerRef.current = null;
     }
+
+    if (bundleFlushIdleRef.current != null && typeof window.cancelIdleCallback === "function") {
+      window.cancelIdleCallback(bundleFlushIdleRef.current);
+      bundleFlushIdleRef.current = null;
+    }
+
+    if (bundleFlushTimeoutRef.current != null) {
+      window.clearTimeout(bundleFlushTimeoutRef.current);
+      bundleFlushTimeoutRef.current = null;
+    }
+  }
+
+  function clearScrollSettledWork(): void {
+    if (scrollSettledIdleRef.current != null && typeof window.cancelIdleCallback === "function") {
+      window.cancelIdleCallback(scrollSettledIdleRef.current);
+      scrollSettledIdleRef.current = null;
+    }
+
+    if (scrollSettledTimeoutRef.current != null) {
+      window.clearTimeout(scrollSettledTimeoutRef.current);
+      scrollSettledTimeoutRef.current = null;
+    }
+  }
+
+  function scheduleWhenBrowserIdle(
+    callback: () => void,
+    refs: { idle: { current: number | null }; timeout: { current: number | null } },
+    timeout = 250
+  ): void {
+    if (typeof window.requestIdleCallback === "function") {
+      refs.idle.current = window.requestIdleCallback(
+        () => {
+          refs.idle.current = null;
+          callback();
+        },
+        { timeout }
+      );
+      return;
+    }
+
+    refs.timeout.current = window.setTimeout(() => {
+      refs.timeout.current = null;
+      callback();
+    }, Math.min(timeout, 120));
   }
 
   function scheduleBundleFlush(): void {
@@ -363,9 +411,19 @@ export function EditorPage() {
         scheduleBundleFlush();
         return;
       }
-      startTransition(() => {
-        flushPendingPageStateToBundle();
-      });
+      scheduleWhenBrowserIdle(
+        () => {
+          if (touchScrollActiveRef.current) {
+            scheduleBundleFlush();
+            return;
+          }
+          startTransition(() => {
+            flushPendingPageStateToBundle();
+          });
+        },
+        { idle: bundleFlushIdleRef, timeout: bundleFlushTimeoutRef },
+        500
+      );
     }, 800);
   }
 
@@ -384,38 +442,39 @@ export function EditorPage() {
 
   function setTouchScrollActive(nextValue: boolean): void {
     touchScrollActiveRef.current = nextValue;
+    if (nextValue) {
+      clearScrollSettledWork();
+    }
     if (!nextValue) {
-      // Defer state updates completely off the current event loop tick.
-      // On iPad Safari, startTransition alone doesn't yield to the scroll
-      // compositor — the re-render for 1500 pages still blocks touch input.
-      // Using setTimeout(0) ensures the browser processes pending touch/scroll
-      // events before React starts its work.
-      setTimeout(() => {
-        // If the user started scrolling again before this callback ran,
-        // bail out — the next scroll-end will handle the flush.
-        if (touchScrollActiveRef.current) {
-          return;
-        }
-        startTransition(() => {
-          const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
-            .sort((left, right) => right[1] - left[1])
-            .map(([pageId]) => pageId);
-
-          setVisiblePageIds((current) => {
-            if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
-              return current;
-            }
-            return sortedVisibleIds;
-          });
-
-          const pendingActivePageId = pendingActivePageIdRef.current;
-          if (pendingActivePageId && pendingActivePageId !== activePageIdRef.current) {
-            pendingActivePageIdRef.current = null;
-            activePageIdRef.current = pendingActivePageId;
-            setActivePageId(pendingActivePageId);
+      scheduleWhenBrowserIdle(
+        () => {
+          if (touchScrollActiveRef.current) {
+            return;
           }
-        });
-      }, 0);
+
+          startTransition(() => {
+            const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
+              .sort((left, right) => right[1] - left[1])
+              .map(([pageId]) => pageId);
+
+            setVisiblePageIds((current) => {
+              if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
+                return current;
+              }
+              return sortedVisibleIds;
+            });
+
+            const pendingActivePageId = pendingActivePageIdRef.current;
+            if (pendingActivePageId && pendingActivePageId !== activePageIdRef.current) {
+              pendingActivePageIdRef.current = null;
+              activePageIdRef.current = pendingActivePageId;
+              setActivePageId(pendingActivePageId);
+            }
+          });
+        },
+        { idle: scrollSettledIdleRef, timeout: scrollSettledTimeoutRef },
+        450
+      );
     }
   }
 
@@ -957,9 +1016,10 @@ export function EditorPage() {
         window.clearTimeout(touchScrollEndTimerRef.current);
         touchScrollEndTimerRef.current = null;
       }
+      clearScrollSettledWork();
       pagePanelNode.removeEventListener("touchstart", handleTouchBegin);
       pagePanelNode.removeEventListener("scroll", handleScroll);
-      setTouchScrollActive(false);
+      touchScrollActiveRef.current = false;
     };
   }, [documentId, loading, isCompactLayout]);
 
@@ -1502,14 +1562,23 @@ export function EditorPage() {
       return;
     }
 
+    let cancelled = false;
+    const deferredTimeouts: number[] = [];
+    const deferredIdleCallbacks: number[] = [];
+
     // Debounce prefetch to avoid firing a burst of renders on every scroll tick
     const prefetchTimer = window.setTimeout(() => {
+      if (cancelled || touchScrollActiveRef.current) {
+        return;
+      }
+
       const currentPage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
       if (!currentPage) {
         return;
       }
 
       const hydratedPageIdSet = new Set(hydratedPageIds);
+      const visiblePageIdSet = new Set(visiblePageIds);
       const warmPages = bundle.pages.filter(
         (page) =>
           page.kind === "pdf" &&
@@ -1520,6 +1589,10 @@ export function EditorPage() {
       const localFileMap = new Map(bundle!.files.map((f) => [f.id, f]));
 
       function warmPage(page: PageRecord): void {
+        if (cancelled || touchScrollActiveRef.current) {
+          return;
+        }
+
         const sourceFile = page.sourceFileId ? localFileMap.get(page.sourceFileId) : undefined;
         if (!sourceFile) {
           return;
@@ -1530,16 +1603,16 @@ export function EditorPage() {
 
         void preloadPreviewImage(pagePreviewUrl);
         void preloadPreviewImage(thumbnailPreviewUrl);
-        loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
-          // Best-effort warm cache only.
-        });
-        void prewarmPdfPagePreview(
-          sourceFile.url,
-          (page.sourcePageIndex ?? 0) + 1,
-          page.width,
-          page.height,
-          sourceFile.size
-        );
+
+        const shouldWarmPdfPage =
+          visiblePageIdSet.has(page.id) ||
+          Math.abs(page.position - currentPage.position) <= 1;
+
+        if (shouldWarmPdfPage) {
+          loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
+            // Best-effort warm cache only.
+          });
+        }
       }
 
       // Urgent: pages within 2 positions — warm immediately
@@ -1558,17 +1631,27 @@ export function EditorPage() {
       // Deferred: warm during idle time to avoid blocking scroll
       deferred.forEach((page, i) => {
         if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(() => warmPage(page));
+          const idleId = requestIdleCallback(
+            () => warmPage(page),
+            { timeout: 700 + i * 40 }
+          );
+          deferredIdleCallbacks.push(idleId);
         } else {
-          window.setTimeout(() => warmPage(page), 50 * (i + 1));
+          const timeoutId = window.setTimeout(() => warmPage(page), 90 * (i + 1));
+          deferredTimeouts.push(timeoutId);
         }
       });
     }, 200);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(prefetchTimer);
+      deferredTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      if (typeof window.cancelIdleCallback === "function") {
+        deferredIdleCallbacks.forEach((idleId) => window.cancelIdleCallback(idleId));
+      }
     };
-  }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey]);
+  }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey, visiblePageIds]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { acquireRenderSlot, getCachedPageSnapshot, getCachedPreviewSnapshot, loadPdfPage, releaseRenderSlot, storePageSnapshot } from "../lib/pdf";
+import { acquireRenderSlot, getCachedPageSnapshot, loadPdfPage, releaseRenderSlot, storePageSnapshot } from "../lib/pdf";
 
 interface PdfPageLayerProps {
   pageIndex: number;
@@ -76,17 +76,6 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, previewUrl, width, height
             setError("");
           }
           return;
-        }
-
-        // Show preview snapshot on canvas if no content yet
-        if (!hasRenderedOnceRef.current) {
-          const previewSnapshot = getCachedPreviewSnapshot(url, pageIndex + 1);
-          if (previewSnapshot) {
-            canvas.width = previewSnapshot.width;
-            canvas.height = previewSnapshot.height;
-            context.drawImage(previewSnapshot, 0, 0);
-            canvas.style.opacity = "1";
-          }
         }
 
         const page = await loadPdfPage(url, pageIndex + 1, fileSize);

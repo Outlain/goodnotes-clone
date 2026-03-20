@@ -4,7 +4,6 @@ GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", i
 
 const pdfCache = new Map<string, Promise<PDFDocumentProxy>>();
 const pdfPageCache = new Map<string, Map<number, Promise<PDFPageProxy>>>();
-const previewWarmTaskCache = new Map<string, Promise<void>>();
 const previewImageWarmCache = new Map<string, Promise<void>>();
 const PREVIEW_WIDTH_BUCKETS = [240, 1000, 1400];
 
@@ -101,7 +100,6 @@ class CanvasSnapshotCache {
 }
 
 const pageSnapshotCache = new CanvasSnapshotCache(40_000_000);
-const previewSnapshotCache = new CanvasSnapshotCache(14_000_000);
 const thumbnailSnapshotCache = new CanvasSnapshotCache(10_000_000);
 
 interface PdfLoadProfile {
@@ -142,10 +140,6 @@ function resolvePdfLoadProfile(fileSize?: number): PdfLoadProfile {
 
 function pdfCacheKey(url: string, fileSize?: number): string {
   return `${url}|${resolvePdfLoadProfile(fileSize).cacheKey}`;
-}
-
-function previewCacheKey(url: string, pageNumber: number): string {
-  return `${url}|${pageNumber}|preview`;
 }
 
 export function resolvePreviewWidthBucket(requestedWidth: number): number {
@@ -223,10 +217,6 @@ export function storePageSnapshot(key: string, sourceCanvas: HTMLCanvasElement):
   pageSnapshotCache.set(key, sourceCanvas);
 }
 
-export function getCachedPreviewSnapshot(url: string, pageNumber: number): HTMLCanvasElement | undefined {
-  return previewSnapshotCache.get(previewCacheKey(url, pageNumber));
-}
-
 export function preloadPreviewImage(url: string): Promise<void> {
   if (!url || typeof Image === "undefined") {
     return Promise.resolve();
@@ -251,67 +241,6 @@ export function preloadPreviewImage(url: string): Promise<void> {
   return task;
 }
 
-export async function prewarmPdfPagePreview(
-  url: string,
-  pageNumber: number,
-  pageWidth: number,
-  pageHeight: number,
-  fileSize?: number
-): Promise<void> {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  const cacheKey = previewCacheKey(url, pageNumber);
-  if (previewSnapshotCache.get(cacheKey)) {
-    return;
-  }
-
-  if (previewWarmTaskCache.has(cacheKey)) {
-    return previewWarmTaskCache.get(cacheKey) as Promise<void>;
-  }
-
-  const task = (async () => {
-    const page = await loadPdfPage(url, pageNumber, fileSize);
-    const deviceScale = window.devicePixelRatio || 1;
-    const previewScale = Math.max(
-      0.24,
-      Math.sqrt(520_000 / Math.max(pageWidth * pageHeight, 1)) * deviceScale
-    );
-    const viewport = page.getViewport({ scale: previewScale });
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d");
-    if (!context) {
-      page.cleanup();
-      return;
-    }
-
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-
-    // Wait for a render slot so preview warmups don't saturate the worker
-    await acquireRenderSlot();
-    try {
-      await page.render({
-        canvasContext: context,
-        viewport
-      }).promise;
-    } finally {
-      releaseRenderSlot();
-    }
-    page.cleanup();
-    previewSnapshotCache.set(cacheKey, canvas);
-  })();
-
-  previewWarmTaskCache.set(cacheKey, task);
-
-  try {
-    await task;
-  } finally {
-    previewWarmTaskCache.delete(cacheKey);
-  }
-}
-
 export function getCachedThumbnailSnapshot(key: string): HTMLCanvasElement | undefined {
   return thumbnailSnapshotCache.get(key);
 }
@@ -323,11 +252,9 @@ export function storeThumbnailSnapshot(key: string, sourceCanvas: HTMLCanvasElem
 export function scaleCachesForDocument(pageCount: number): void {
   if (pageCount > 500) {
     pageSnapshotCache.resize(80_000_000);
-    previewSnapshotCache.resize(28_000_000);
     thumbnailSnapshotCache.resize(16_000_000);
   } else if (pageCount > 100) {
     pageSnapshotCache.resize(60_000_000);
-    previewSnapshotCache.resize(20_000_000);
     thumbnailSnapshotCache.resize(14_000_000);
   }
 }
