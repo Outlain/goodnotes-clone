@@ -5,16 +5,26 @@ interface PdfThumbnailProps {
   pageIndex: number;
   url: string;
   fileSize?: number;
+  previewUrl?: string;
   width: number;
   height: number;
 }
 
-function PdfThumbnailInner({ pageIndex, url, fileSize, width, height }: PdfThumbnailProps) {
+function PdfThumbnailInner({ pageIndex, url, fileSize, previewUrl, width, height }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
+  const [useCanvasFallback, setUseCanvasFallback] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setUseCanvasFallback(false);
+  }, [previewUrl]);
+
+  useEffect(() => {
+    if (previewUrl && !useCanvasFallback) {
+      return;
+    }
+
     let cancelled = false;
 
     async function render() {
@@ -118,11 +128,21 @@ function PdfThumbnailInner({ pageIndex, url, fileSize, width, height }: PdfThumb
       cancelled = true;
       renderTaskRef.current?.cancel();
     };
-  }, [fileSize, height, pageIndex, url, width]);
+  }, [fileSize, height, pageIndex, previewUrl, url, useCanvasFallback, width]);
 
   return (
     <>
-      <canvas className="thumbnail-canvas" ref={canvasRef} />
+      {previewUrl && !useCanvasFallback ? (
+        <img
+          alt=""
+          className="thumbnail-image"
+          loading="lazy"
+          onError={() => setUseCanvasFallback(true)}
+          src={previewUrl}
+        />
+      ) : (
+        <canvas className="thumbnail-canvas" ref={canvasRef} />
+      )}
       {error ? <div className="thumbnail-overlay">Preview unavailable</div> : null}
     </>
   );

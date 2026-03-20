@@ -15,6 +15,7 @@ import {
   getLibraryPayload,
   getPageDocumentId,
   getStoredFile,
+  getStoredFileByStorageKey,
   insertBlankPage,
   insertPdfPages,
   searchDocumentPages,
@@ -27,9 +28,11 @@ import {
 import { env } from "../lib/env.js";
 import { HttpError } from "../lib/http.js";
 import { asyncRoute } from "../lib/http.js";
+import { startBackgroundPdfMaintenance, enqueuePdfOptimization } from "../lib/pdfMaintenance.js";
 import { buildExportPdf, inspectPdf } from "../lib/pdf.js";
 import { maybeLinearizePdf } from "../lib/pdfOptimize.js";
-import { getUploadPath, persistUploadedPdf, tempUploadsDir } from "../lib/storage.js";
+import { ensurePdfPreviewImage } from "../lib/pdfPreview.js";
+import { getUploadPath, persistUploadedPdf, removePreviewCacheForUpload, tempUploadsDir } from "../lib/storage.js";
 import { broadcastAnnotationUpdate, broadcastDocumentChanged } from "../lib/sync.js";
 
 const folderSchema = z.object({
@@ -176,6 +179,11 @@ libraryRouter.post(
         pages: inspected.pages
       });
 
+      const createdFile = getStoredFileByStorageKey(persisted.storageKey);
+      if (createdFile) {
+        enqueuePdfOptimization(createdFile);
+      }
+
       response.status(201).json(toPublicDocumentBundle(document, { includeBaseText: false }));
     } catch (error) {
       await unlink(persisted.absolutePath).catch(() => undefined);
@@ -238,6 +246,7 @@ libraryRouter.delete(
     // Best-effort file cleanup — don't fail the response if disk delete fails.
     for (const key of storageKeys) {
       await unlink(getUploadPath(key)).catch(() => undefined);
+      await removePreviewCacheForUpload(key).catch(() => undefined);
     }
 
     response.json({ success: true });
@@ -325,6 +334,10 @@ libraryRouter.post(
         }),
         { includeBaseText: false }
       );
+      const insertedFile = getStoredFileByStorageKey(persisted.storageKey);
+      if (insertedFile) {
+        enqueuePdfOptimization(insertedFile);
+      }
       broadcastDocumentChanged(documentId, senderId);
       response.status(201).json(result);
     } catch (error) {
@@ -399,5 +412,28 @@ libraryRouter.get(
     response.setHeader("Cache-Control", "private, max-age=3600");
     response.setHeader("Accept-Ranges", "bytes");
     response.sendFile(getUploadPath(file.storageKey));
+  })
+);
+
+libraryRouter.get(
+  "/files/:fileId/pages/:pageNumber/preview",
+  asyncRoute(async (request, response) => {
+    const file = getStoredFile(String(request.params.fileId));
+    if (!file) {
+      throw new HttpError(404, "File not found.");
+    }
+
+    const pageNumber = Math.max(1, Number(request.params.pageNumber));
+    if (!Number.isInteger(pageNumber) || pageNumber > file.pageCount) {
+      throw new HttpError(400, "Invalid PDF page number.");
+    }
+
+    const width = Math.max(120, Math.min(1800, Number(request.query.width) || env.pdfThumbnailWidth));
+    const previewPath = await ensurePdfPreviewImage(file.storageKey, getUploadPath(file.storageKey), pageNumber, width);
+
+    response.type("image/jpeg");
+    response.setHeader("Content-Disposition", "inline");
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.sendFile(previewPath);
   })
 );

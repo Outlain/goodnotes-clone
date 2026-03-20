@@ -1562,6 +1562,15 @@ export function EditorPage() {
   const shouldBuildThumbnails = !isCompactLayout || compactPagesOpen;
   const pageShellPaddingPx = isCompactLayout ? 0 : 32;
 
+  function getThumbnailPreviewUrl(fileId: string, sourcePageIndex: number | null): string {
+    return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=240`;
+  }
+
+  function getPagePreviewUrl(fileId: string, sourcePageIndex: number | null, stageWidth: number): string {
+    const bucketedWidth = Math.max(700, Math.min(1500, Math.round(stageWidth / 200) * 200 || 1000));
+    return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=${bucketedWidth}`;
+  }
+
   function getPageRenderMetrics(page: PageRecord): { stageWidth: number; stageHeight: number; renderZoom: number; viewportWidth: number } {
     const viewportWidth = pagePanelViewportWidth > 0 ? Math.max(0, pagePanelViewportWidth - pageShellPaddingPx) : page.width;
     const fitScale = viewportWidth > 0 ? viewportWidth / page.width : 1;
@@ -1596,6 +1605,7 @@ export function EditorPage() {
                     fileSize={thumbnailFile?.size}
                     height={page.height}
                     pageIndex={page.sourcePageIndex ?? 0}
+                    previewUrl={thumbnailFile ? getThumbnailPreviewUrl(thumbnailFile.id, page.sourcePageIndex) : undefined}
                     url={thumbnailFileUrl}
                     width={page.width}
                   />
@@ -2218,6 +2228,7 @@ export function EditorPage() {
               const pageFileUrl = pageFile?.url;
               const shouldRenderPage = renderedPageIdSet.has(page.id);
               const pageRenderMetrics = getPageRenderMetrics(page);
+              const pagePreviewUrl = pageFile ? getPagePreviewUrl(pageFile.id, page.sourcePageIndex, pageRenderMetrics.stageWidth) : undefined;
 
               return (
                 <div
@@ -2232,6 +2243,7 @@ export function EditorPage() {
                       color={inkColor}
                       fileSize={pageFile?.size}
                       fileUrl={pageFileUrl}
+                      previewUrl={pagePreviewUrl}
                       onChange={(nextAnnotations) => setPageAnnotations(page.id, nextAnnotations)}
                       page={page}
                       palmSettings={palmSettings}

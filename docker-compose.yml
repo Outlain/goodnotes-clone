@@ -17,6 +17,12 @@ services:
       PDF_UPLOAD_LIMIT_MB: "512"
       # Keep this on to linearize large uploads when qpdf is available in the container
       PDF_LINEARIZE_UPLOADS: "true"
+      # Re-optimize already-stored PDFs in the background on startup
+      PDF_OPTIMIZE_EXISTING_ON_STARTUP: "true"
+      # Number of first pages to pre-generate as cached preview images
+      PDF_PREGENERATE_PREVIEW_COUNT: "8"
+      # Width of cached sidebar/page preview images in pixels
+      PDF_THUMBNAIL_WIDTH: "240"
       # Replace this with your own long random secret before deploying
       SESSION_SECRET: change-this-to-a-long-random-secret
       # Optional. Leave blank to disable the login screen

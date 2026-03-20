@@ -288,6 +288,7 @@ a {
 }
 
 .page-paper,
+.page-preview-image,
 .pdf-canvas,
 .annotation-layer,
 .shape-selection-layer {
@@ -301,6 +302,11 @@ a {
 }
 
 .page-paper {
+  background: #fffdf7;
+}
+
+.page-preview-image {
+  object-fit: cover;
   background: #fffdf7;
 }
 
@@ -750,6 +756,15 @@ a {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.thumbnail-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #fffdf7;
 }
 
 .thumbnail-overlay {

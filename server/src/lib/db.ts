@@ -964,6 +964,26 @@ export function getStoredFile(fileId: string): (FilePayload & { storageKey: stri
   };
 }
 
+export function getStoredFileByStorageKey(storageKey: string): (FilePayload & { storageKey: string; documentId: string }) | undefined {
+  const row = db.prepare("SELECT * FROM files WHERE storage_key = ?").get(storageKey) as FileRow | undefined;
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    ...mapFile(row),
+    documentId: row.document_id
+  };
+}
+
+export function listStoredFiles(): Array<FilePayload & { storageKey: string; documentId: string }> {
+  const rows = db.prepare("SELECT * FROM files ORDER BY created_at ASC").all() as FileRow[];
+  return rows.map((row) => ({
+    ...mapFile(row),
+    documentId: row.document_id
+  }));
+}
+
 export function toPublicDocumentBundle(bundle: DocumentBundle, options?: { includeBaseText?: boolean }) {
   return {
     ...bundle,

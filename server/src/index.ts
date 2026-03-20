@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 import { env } from "./lib/env.js";
 import { requireSession } from "./lib/auth.js";
 import { HttpError } from "./lib/http.js";
+import { startBackgroundPdfMaintenance } from "./lib/pdfMaintenance.js";
 import { setupWebSocketServer } from "./lib/sync.js";
 import { libraryRouter } from "./routes/library.js";
 import { sessionRouter } from "./routes/session.js";
@@ -71,4 +72,5 @@ setupWebSocketServer(server);
 
 server.listen(env.port, () => {
   console.log(`Inkflow server listening on port ${env.port}`);
+  startBackgroundPdfMaintenance();
 });

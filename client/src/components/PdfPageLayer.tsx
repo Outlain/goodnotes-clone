@@ -5,6 +5,7 @@ interface PdfPageLayerProps {
   pageIndex: number;
   url: string;
   fileSize?: number;
+  previewUrl?: string;
   width: number;
   height: number;
   zoom: number;
@@ -12,7 +13,7 @@ interface PdfPageLayerProps {
 
 const MAX_RENDER_PIXELS = 3_200_000;
 
-function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: PdfPageLayerProps) {
+function PdfPageLayerInner({ pageIndex, url, fileSize, previewUrl, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -145,6 +146,7 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: Pd
 
   return (
     <>
+      {previewUrl && (isLoading || Boolean(error)) ? <img alt="" className="page-preview-image" src={previewUrl} /> : null}
       <canvas className="pdf-canvas" ref={canvasRef} />
       {isLoading && !error ? <div className="page-fallback">Loading PDF page...</div> : null}
       {error ? <div className="page-fallback">PDF preview failed: {error}</div> : null}
