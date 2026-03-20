@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EditorCanvas } from "../components/EditorCanvas";
 import { PdfThumbnail } from "../components/PdfThumbnail";
@@ -704,7 +704,7 @@ export function EditorPage() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pagePanelNode = pagePanelRef.current;
     if (!pagePanelNode || typeof ResizeObserver === "undefined") {
       return;
@@ -1288,6 +1288,15 @@ export function EditorPage() {
     ? bundle.pages.filter((page) => getPageSearchText(page).toLowerCase().includes(searchQuery.trim().toLowerCase()))
     : [];
   const visiblePageIdSet = new Set(visiblePageIds);
+  const visiblePagePositions = bundle.pages
+    .filter((page) => visiblePageIdSet.has(page.id))
+    .map((page) => page.position);
+  const renderAnchorMin = visiblePagePositions.length
+    ? Math.min(...visiblePagePositions)
+    : activePage?.position ?? bundle.pages[0]?.position ?? 1;
+  const renderAnchorMax = visiblePagePositions.length
+    ? Math.max(...visiblePagePositions)
+    : activePage?.position ?? bundle.pages[0]?.position ?? 1;
   const previewWindow = new Set(
     activePage
       ? bundle.pages
@@ -1296,11 +1305,13 @@ export function EditorPage() {
       : []
   );
   const renderedPageIdSet = new Set(
-    activePage
-      ? bundle.pages
-          .filter((page) => visiblePageIdSet.has(page.id) || Math.abs(page.position - activePage.position) <= RENDER_AHEAD_RADIUS)
-          .map((page) => page.id)
-      : bundle.pages.slice(0, 3).map((page) => page.id)
+    bundle.pages
+      .filter(
+        (page) =>
+          visiblePageIdSet.has(page.id) ||
+          (page.position >= renderAnchorMin - RENDER_AHEAD_RADIUS && page.position <= renderAnchorMax + RENDER_AHEAD_RADIUS)
+      )
+      .map((page) => page.id)
   );
   const compactSaveLabel = saveState === "All changes saved" ? "Saved" : saveState;
   const compactInkColors = inkColors.filter(
@@ -1308,6 +1319,19 @@ export function EditorPage() {
   );
   const visibleCompactThumbnailIdSet = new Set(visibleCompactThumbnailIds);
   const shouldBuildThumbnails = !isCompactLayout || compactPagesOpen;
+  const pageShellPaddingPx = isCompactLayout ? 0 : 32;
+
+  function getPageRenderMetrics(page: PageRecord): { stageWidth: number; stageHeight: number; renderZoom: number; viewportWidth: number } {
+    const viewportWidth = pagePanelViewportWidth > 0 ? Math.max(0, pagePanelViewportWidth - pageShellPaddingPx) : page.width;
+    const fitScale = viewportWidth > 0 ? viewportWidth / page.width : 1;
+    const renderZoom = Math.max(0.2, fitScale * zoom);
+    return {
+      stageWidth: page.width * renderZoom,
+      stageHeight: page.height * renderZoom,
+      renderZoom,
+      viewportWidth
+    };
+  }
 
   const thumbnailRailContent = shouldBuildThumbnails
     ? bundle.pages.map((page) => {
@@ -1788,6 +1812,7 @@ export function EditorPage() {
             {bundle.pages.map((page) => {
               const pageFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
               const shouldRenderPage = renderedPageIdSet.has(page.id);
+              const pageRenderMetrics = getPageRenderMetrics(page);
 
               return (
                 <div
@@ -1808,30 +1833,17 @@ export function EditorPage() {
                       lineStyle={lineStyle}
                       eraserSize={eraserSize}
                       tool={tool}
-                      viewportWidthHint={pagePanelViewportWidth}
+                      viewportWidthHint={pageRenderMetrics.viewportWidth}
                       zoom={zoom}
                     />
                   ) : (
                     <div className="page-stage-shell">
                       <div
                         className="page-placeholder"
-                        style={(() => {
-                          // Match the sizing that EditorCanvas produces so that
-                          // switching between placeholder and rendered page
-                          // doesn't cause a height change (scroll jump).
-                          // EditorCanvas measures availableWidth from the shell
-                          // minus its horizontal padding (1rem = 16px each side).
-                          const shellPaddingPx = isCompactLayout ? 0 : 32;
-                          const effectiveWidth = pagePanelViewportWidth > 0
-                            ? pagePanelViewportWidth - shellPaddingPx
-                            : page.width;
-                          const fitScale = effectiveWidth / page.width;
-                          const renderZoom = Math.max(0.2, fitScale * zoom);
-                          return {
-                            width: `${page.width * renderZoom}px`,
-                            height: `${page.height * renderZoom}px`
-                          };
-                        })()}
+                        style={{
+                          width: `${pageRenderMetrics.stageWidth}px`,
+                          height: `${pageRenderMetrics.stageHeight}px`
+                        }}
                       >
                         <span>Page {page.position}</span>
                       </div>
