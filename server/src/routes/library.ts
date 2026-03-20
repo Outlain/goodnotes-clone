@@ -23,6 +23,7 @@ import {
   appendPageAnnotations,
   updatePageAnnotations
 } from "../lib/db.js";
+import { env } from "../lib/env.js";
 import { HttpError } from "../lib/http.js";
 import { asyncRoute } from "../lib/http.js";
 import { buildExportPdf, inspectPdf } from "../lib/pdf.js";
@@ -69,7 +70,7 @@ const appendAnnotationsSchema = z.object({
 const upload = multer({
   dest: tempUploadsDir,
   limits: {
-    fileSize: 1024 * 1024 * 100
+    fileSize: env.pdfUploadLimitMb * 1024 * 1024
   }
 });
 

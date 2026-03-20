@@ -2,6 +2,7 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
 import helmet from "helmet";
+import multer from "multer";
 import { createServer } from "node:http";
 import path from "node:path";
 import { existsSync } from "node:fs";
@@ -51,6 +52,14 @@ if (existsSync(env.publicDir)) {
 
 app.use((error: Error, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   console.error(error);
+
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    response.status(413).json({
+      message: `PDF exceeds the current upload limit of ${env.pdfUploadLimitMb} MB. Increase PDF_UPLOAD_LIMIT_MB or split the source PDF into sections.`
+    });
+    return;
+  }
+
   const status = error instanceof HttpError ? error.status : 500;
   response.status(status).json({
     message: error.message || "Unexpected server error."

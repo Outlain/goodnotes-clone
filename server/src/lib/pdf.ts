@@ -249,7 +249,6 @@ function drawAnnotations(
 
 export async function inspectPdf(filePath: string): Promise<{ pageCount: number; pages: ExtractedPdfPage[] }> {
   const bytes = await readFile(filePath);
-  const pdfDocument = await PDFDocument.load(bytes);
   const pdfJsTask = getDocument({
     data: new Uint8Array(bytes),
     useSystemFonts: true
@@ -257,21 +256,20 @@ export async function inspectPdf(filePath: string): Promise<{ pageCount: number;
   const pdfJsDocument = await pdfJsTask.promise;
 
   const pages: ExtractedPdfPage[] = [];
-  const pdfPages = pdfDocument.getPages();
-
-  for (let index = 0; index < pdfPages.length; index += 1) {
-    const currentPage = pdfPages[index];
+  for (let index = 0; index < pdfJsDocument.numPages; index += 1) {
     const textPage = await pdfJsDocument.getPage(index + 1);
+    const viewport = textPage.getViewport({ scale: 1 });
     const textContent = await textPage.getTextContent();
     const text = normalizeText(
       textContent.items
         .map((item) => ("str" in item ? item.str : ""))
         .join(" ")
     );
+    textPage.cleanup();
 
     pages.push({
-      width: currentPage.getWidth(),
-      height: currentPage.getHeight(),
+      width: viewport.width,
+      height: viewport.height,
       text
     });
   }

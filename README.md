@@ -47,7 +47,7 @@ npm --prefix client install
 3. In one terminal, run the API with environment variables in the shell:
 
 ```bash
-PORT=3000 DATA_DIR=./data SESSION_SECRET=development-session-secret APP_PASSWORD= npm run dev:server
+PORT=3000 DATA_DIR=./data PDF_UPLOAD_LIMIT_MB=512 SESSION_SECRET=development-session-secret APP_PASSWORD= npm run dev:server
 ```
 
 4. In another terminal, run the web app:
@@ -118,6 +118,7 @@ The default Compose file now uses an inline `environment:` block instead of an e
 environment:
   PORT: "3000"
   DATA_DIR: /app/data
+  PDF_UPLOAD_LIMIT_MB: "512"
   SESSION_SECRET: change-this-to-a-long-random-secret
   APP_PASSWORD: ""
 ```
@@ -137,6 +138,7 @@ You do not need a `.env` file for the default Docker setup anymore.
 
 - `SESSION_SECRET` to a long random string
 - `APP_PASSWORD` if you want a login gate
+- `PDF_UPLOAD_LIMIT_MB` if you plan to import very large PDFs
 
 2. Start the container:
 
@@ -199,6 +201,7 @@ services:
     environment:
       PORT: "3000"
       DATA_DIR: /app/data
+      PDF_UPLOAD_LIMIT_MB: "512"
       SESSION_SECRET: replace-this-with-a-long-random-secret
       APP_PASSWORD: ""
     volumes:
@@ -216,8 +219,28 @@ For most deployments you only need to change:
 
 - `PORT`: HTTP port for the server
 - `DATA_DIR`: data directory for SQLite and uploads. In Docker, keep this as `/app/data`.
+- `PDF_UPLOAD_LIMIT_MB`: maximum accepted PDF upload size in megabytes. Default is `512`.
 - `SESSION_SECRET`: secret key used to sign the session cookie after login
 - `APP_PASSWORD`: optional shared password for the deployment. Leave blank to disable the login screen.
+
+### Large PDF Notes
+
+Inkflow is designed for textbook-sized PDFs, but there are two separate limits to keep in mind:
+
+- upload size: the server must accept the file in the first place
+- rendering/indexing cost: very large or poorly optimized PDFs can still take longer to import and preview
+
+For self-hosting, the default upload limit is now `512 MB`, which is enough for most large textbooks and scanned workbooks. If you need more, raise `PDF_UPLOAD_LIMIT_MB` in your Docker/Portainer stack.
+
+Practical guidance:
+
+- `175 MB` should import after this change
+- if you front Inkflow with Nginx, Traefik, Caddy, Cloudflare, or another proxy, make sure its request body/upload size limit is also high enough
+- if a PDF is unusually image-heavy, give the container enough RAM because import still extracts page text and page sizes
+- for large textbook and workbook collections, `2 GB` RAM is a reasonable starting point and `4 GB` gives more headroom for very large scanned PDFs
+- storing `data/` on SSD/NVMe helps a lot for large PDF workflows
+- enabling PDF "Fast Web View" / linearization before upload can improve initial remote loading because the browser PDF renderer can use byte-range requests more effectively
+- if a source PDF is still awkward to work with, splitting it into chapter PDFs and inserting them into one Inkflow document is a workable fallback because the app can keep them in one continuous note flow
 
 ### Authentication variables explained
 

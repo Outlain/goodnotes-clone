@@ -15,9 +15,9 @@ export const env = {
   isProduction: (process.env.NODE_ENV ?? "development") === "production",
   port: toNumber(process.env.PORT, 3000),
   dataDir: path.resolve(process.env.DATA_DIR ?? path.join(serverRoot, "..", "data")),
+  pdfUploadLimitMb: Math.max(25, toNumber(process.env.PDF_UPLOAD_LIMIT_MB, 512)),
   sessionSecret: process.env.SESSION_SECRET ?? "development-only-session-secret",
   appPassword: process.env.APP_PASSWORD?.trim() || "",
   publicDir: path.join(serverRoot, "public"),
   cookieName: "inkflow_session"
 };
-
