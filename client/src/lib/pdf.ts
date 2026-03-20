@@ -8,6 +8,31 @@ const previewWarmTaskCache = new Map<string, Promise<void>>();
 const previewImageWarmCache = new Map<string, Promise<void>>();
 const PREVIEW_WIDTH_BUCKETS = [240, 1000, 1400];
 
+// Limits concurrent PDF page renders to prevent worker thread saturation
+// which causes the main thread to stall (scroll freeze).
+const MAX_CONCURRENT_RENDERS = 3;
+let activeRenders = 0;
+const renderQueue: Array<{ resolve: () => void }> = [];
+
+export function acquireRenderSlot(): Promise<void> {
+  if (activeRenders < MAX_CONCURRENT_RENDERS) {
+    activeRenders++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    renderQueue.push({ resolve });
+  });
+}
+
+export function releaseRenderSlot(): void {
+  activeRenders = Math.max(0, activeRenders - 1);
+  const next = renderQueue.shift();
+  if (next) {
+    activeRenders++;
+    next.resolve();
+  }
+}
+
 class CanvasSnapshotCache {
   private totalPixels = 0;
   private readonly entries = new Map<string, { canvas: HTMLCanvasElement; pixels: number }>();

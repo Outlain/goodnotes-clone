@@ -270,7 +270,6 @@ a {
   display: flex;
   justify-content: center;
   contain: layout style paint;
-  content-visibility: auto;
 }
 
 .page-stack-item.active .page-stage {
@@ -1350,6 +1349,66 @@ a {
   .compact-view-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Compact header slide-away ───────── */
+
+.compact-editor-header {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.compact-editor-header.compact-header-hidden {
+  transform: translateY(-120%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.compact-tool-dock {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.compact-tool-dock.compact-header-hidden {
+  transform: translateX(-50%) translateY(-200%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 800px) {
+  .compact-tool-dock.compact-header-hidden {
+    transform: translateY(-200%);
+  }
+}
+
+.compact-page-panel-full {
+  padding-top: 0.9rem !important;
+}
+
+.compact-swipe-hint {
+  position: absolute;
+  top: 1rem;
+  right: 0.75rem;
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(24, 49, 79, 0.12);
+  background: rgba(255, 252, 245, 0.88);
+  backdrop-filter: blur(12px);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 4px 16px rgba(18, 32, 49, 0.12);
+  cursor: pointer;
+  animation: swipe-hint-pulse 2s ease-in-out infinite;
+}
+
+.compact-swipe-hint:active {
+  transform: scale(0.92);
+}
+
+@keyframes swipe-hint-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
 }
 
 /* ── Delete buttons & confirm dialog ───────── */

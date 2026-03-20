@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { getCachedPageSnapshot, getCachedPreviewSnapshot, loadPdfPage, storePageSnapshot } from "../lib/pdf";
+import { acquireRenderSlot, getCachedPageSnapshot, getCachedPreviewSnapshot, loadPdfPage, releaseRenderSlot, storePageSnapshot } from "../lib/pdf";
 
 interface PdfPageLayerProps {
   pageIndex: number;
@@ -106,16 +106,28 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, previewUrl, width, height
           return;
         }
 
-        const renderTask = page.render({
-          canvasContext: offscreenCtx,
-          viewport
-        });
-        renderTaskRef.current = renderTask;
+        // Wait for a render slot to avoid saturating the PDF.js worker
+        await acquireRenderSlot();
+        if (cancelled) {
+          releaseRenderSlot();
+          page.cleanup();
+          return;
+        }
 
-        await renderTask.promise;
+        try {
+          const renderTask = page.render({
+            canvasContext: offscreenCtx,
+            viewport
+          });
+          renderTaskRef.current = renderTask;
 
-        if (renderTaskRef.current === renderTask) {
-          renderTaskRef.current = null;
+          await renderTask.promise;
+
+          if (renderTaskRef.current === renderTask) {
+            renderTaskRef.current = null;
+          }
+        } finally {
+          releaseRenderSlot();
         }
 
         if (cancelled) {

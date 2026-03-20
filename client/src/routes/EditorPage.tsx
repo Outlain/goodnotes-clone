@@ -306,6 +306,8 @@ export function EditorPage() {
   );
   const [compactPagesOpen, setCompactPagesOpen] = useState(false);
   const [compactActionsOpen, setCompactActionsOpen] = useState(false);
+  const [compactHeaderVisible, setCompactHeaderVisible] = useState(false);
+  const swipeTouchRef = useRef<{ startX: number; startY: number } | null>(null);
   const [pdfInsertOpen, setPdfInsertOpen] = useState(false);
   const [pdfInsertPlacement, setPdfInsertPlacement] = useState<"before" | "after">("after");
   const [pdfInsertPageRange, setPdfInsertPageRange] = useState("");
@@ -1571,6 +1573,55 @@ export function EditorPage() {
     };
   }, [activePageId, bundle]);
 
+  // Swipe-left to reveal header, swipe-right to hide on compact layout
+  useEffect(() => {
+    if (!isCompactLayout) {
+      return;
+    }
+
+    function handleTouchStart(event: TouchEvent): void {
+      const touch = event.touches[0];
+      if (touch) {
+        swipeTouchRef.current = { startX: touch.clientX, startY: touch.clientY };
+      }
+    }
+
+    function handleTouchEnd(event: TouchEvent): void {
+      const startTouch = swipeTouchRef.current;
+      const endTouch = event.changedTouches[0];
+      if (!startTouch || !endTouch) {
+        return;
+      }
+
+      const deltaX = endTouch.clientX - startTouch.startX;
+      const deltaY = endTouch.clientY - startTouch.startY;
+      swipeTouchRef.current = null;
+
+      // Only trigger if horizontal swipe is dominant and exceeds threshold
+      if (Math.abs(deltaX) < 60 || Math.abs(deltaY) > Math.abs(deltaX) * 0.7) {
+        return;
+      }
+
+      if (deltaX < 0) {
+        // Swipe left: show header
+        setCompactHeaderVisible(true);
+      } else {
+        // Swipe right: hide header
+        setCompactHeaderVisible(false);
+        setCompactPagesOpen(false);
+        setCompactActionsOpen(false);
+      }
+    }
+
+    window.addEventListener("touchstart", handleTouchStart, { passive: true });
+    window.addEventListener("touchend", handleTouchEnd, { passive: true });
+
+    return () => {
+      window.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [isCompactLayout]);
+
   if (loading) {
     return <main className="loading-screen">Opening document...</main>;
   }
@@ -1886,7 +1937,7 @@ export function EditorPage() {
 
   return (
     <main className={`editor-layout ${isCompactLayout ? "compact-layout" : ""}`}>
-      <header className={`editor-header ${isCompactLayout ? "compact-editor-header" : ""}`}>
+      <header className={`editor-header ${isCompactLayout ? "compact-editor-header" : ""} ${isCompactLayout && !compactHeaderVisible ? "compact-header-hidden" : ""}`}>
         <div className="header-group header-leading">
           <Link
             aria-label={isCompactLayout ? "Back to library" : undefined}
@@ -1957,7 +2008,7 @@ export function EditorPage() {
       </header>
 
       {isCompactLayout ? (
-        <section className="compact-tool-dock">
+        <section className={`compact-tool-dock ${!compactHeaderVisible ? "compact-header-hidden" : ""}`}>
           <div className="compact-tool-scroll">
             <button aria-label="Undo" className="compact-tool-button" disabled={!canUndo} onClick={undoPageChange} type="button">
               <IconGlyph name="undo" />
@@ -2290,7 +2341,7 @@ export function EditorPage() {
       <section className={`editor-body ${isCompactLayout ? "compact-editor-body" : ""}`}>
         {!isCompactLayout ? <aside className="thumbnail-rail">{thumbnailRailContent}</aside> : null}
 
-        <section className={`page-panel ${isCompactLayout ? "compact-page-panel" : ""}`} ref={pagePanelRef}>
+        <section className={`page-panel ${isCompactLayout ? "compact-page-panel" : ""} ${isCompactLayout && !compactHeaderVisible ? "compact-page-panel-full" : ""}`} ref={pagePanelRef}>
           <div className="page-stack">
             {bundle.pages.map((page) => {
               const pageFile = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId) : undefined;
@@ -2360,6 +2411,19 @@ export function EditorPage() {
         <div className={`editor-page-indicator ${isCompactLayout && compactPagesOpen ? "tray-open" : ""}`}>
           {activePage?.position ?? 1} of {bundle.document.pageCount}
         </div>
+
+        {isCompactLayout && !compactHeaderVisible ? (
+          <button
+            className="compact-swipe-hint"
+            aria-label="Show toolbar"
+            onClick={() => setCompactHeaderVisible(true)}
+            type="button"
+          >
+            <svg width="20" height="14" viewBox="0 0 20 14" fill="none" aria-hidden="true">
+              <path d="M12 1L6 7l6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        ) : null}
 
         {!isCompactLayout ? (
           <aside className="inspector-panel">
