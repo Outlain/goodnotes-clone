@@ -18,6 +18,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV DATA_DIR=/app/data
+RUN apt-get update && apt-get install -y qpdf && rm -rf /var/lib/apt/lists/*
 COPY --from=server-builder /app/server/package.json /app/server/package.json
 COPY --from=server-builder /app/server/node_modules /app/server/node_modules
 COPY --from=server-builder /app/server/dist /app/server/dist

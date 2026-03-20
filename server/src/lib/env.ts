@@ -10,12 +10,30 @@ function toNumber(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value == null) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   isProduction: (process.env.NODE_ENV ?? "development") === "production",
   port: toNumber(process.env.PORT, 3000),
   dataDir: path.resolve(process.env.DATA_DIR ?? path.join(serverRoot, "..", "data")),
   pdfUploadLimitMb: Math.max(25, toNumber(process.env.PDF_UPLOAD_LIMIT_MB, 512)),
+  pdfLinearizeUploads: toBoolean(process.env.PDF_LINEARIZE_UPLOADS, true),
   sessionSecret: process.env.SESSION_SECRET ?? "development-only-session-secret",
   appPassword: process.env.APP_PASSWORD?.trim() || "",
   publicDir: path.join(serverRoot, "public"),

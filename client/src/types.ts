@@ -102,6 +102,12 @@ export interface DocumentBundle {
   pages: PageRecord[];
 }
 
+export interface PageSearchResult {
+  pageId: string;
+  position: number;
+  excerpt: string;
+}
+
 export interface LibraryPayload {
   folders: FolderRecord[];
   documents: DocumentSummary[];

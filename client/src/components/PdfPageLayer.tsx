@@ -1,9 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { getCachedPageSnapshot, loadPdfPage, storePageSnapshot } from "../lib/pdf";
+import { getCachedPageSnapshot, getCachedPreviewSnapshot, loadPdfPage, storePageSnapshot } from "../lib/pdf";
 
 interface PdfPageLayerProps {
   pageIndex: number;
   url: string;
+  fileSize?: number;
   width: number;
   height: number;
   zoom: number;
@@ -11,7 +12,7 @@ interface PdfPageLayerProps {
 
 const MAX_RENDER_PIXELS = 3_200_000;
 
-function PdfPageLayerInner({ pageIndex, url, width, height, zoom }: PdfPageLayerProps) {
+function PdfPageLayerInner({ pageIndex, url, fileSize, width, height, zoom }: PdfPageLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -72,7 +73,15 @@ function PdfPageLayerInner({ pageIndex, url, width, height, zoom }: PdfPageLayer
           return;
         }
 
-        const page = await loadPdfPage(url, pageIndex + 1);
+        const previewSnapshot = getCachedPreviewSnapshot(url, pageIndex + 1);
+        if (previewSnapshot) {
+          canvas.width = previewSnapshot.width;
+          canvas.height = previewSnapshot.height;
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(previewSnapshot, 0, 0);
+        }
+
+        const page = await loadPdfPage(url, pageIndex + 1, fileSize);
         if (cancelled) {
           page.cleanup();
           return;
@@ -132,7 +141,7 @@ function PdfPageLayerInner({ pageIndex, url, width, height, zoom }: PdfPageLayer
       cancelled = true;
       renderTaskRef.current?.cancel();
     };
-  }, [height, pageIndex, url, width, zoom]);
+  }, [fileSize, height, pageIndex, url, width, zoom]);
 
   return (
     <>

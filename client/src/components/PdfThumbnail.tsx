@@ -4,11 +4,12 @@ import { getCachedThumbnailSnapshot, loadPdfPage, storeThumbnailSnapshot } from 
 interface PdfThumbnailProps {
   pageIndex: number;
   url: string;
+  fileSize?: number;
   width: number;
   height: number;
 }
 
-function PdfThumbnailInner({ pageIndex, url, width, height }: PdfThumbnailProps) {
+function PdfThumbnailInner({ pageIndex, url, fileSize, width, height }: PdfThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
   const [error, setError] = useState("");
@@ -58,7 +59,7 @@ function PdfThumbnailInner({ pageIndex, url, width, height }: PdfThumbnailProps)
           return;
         }
 
-        const page = await loadPdfPage(url, pageIndex + 1);
+        const page = await loadPdfPage(url, pageIndex + 1, fileSize);
         if (cancelled) {
           page.cleanup();
           return;
@@ -117,7 +118,7 @@ function PdfThumbnailInner({ pageIndex, url, width, height }: PdfThumbnailProps)
       cancelled = true;
       renderTaskRef.current?.cancel();
     };
-  }, [height, pageIndex, url, width]);
+  }, [fileSize, height, pageIndex, url, width]);
 
   return (
     <>

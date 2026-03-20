@@ -3,12 +3,22 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { EditorCanvas } from "../components/EditorCanvas";
 import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
-import { collectAnnotationText, excerptForSearch, getPageSearchText } from "../lib/annotations";
+import { collectAnnotationText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
-import { loadPdfPage } from "../lib/pdf";
+import { loadPdfPage, prewarmPdfPagePreview } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
-import type { Annotation, DocumentBundle, EditorTool, LineStyle, PageRecord, PageTemplate, PalmSettings, ShapeKind } from "../types";
+import type {
+  Annotation,
+  DocumentBundle,
+  EditorTool,
+  LineStyle,
+  PageRecord,
+  PageSearchResult,
+  PageTemplate,
+  PalmSettings,
+  ShapeKind
+} from "../types";
 
 const inkColors = ["#14324E", "#BC412B", "#208B7A", "#8D5A97", "#C87E2A", "#111111"];
 const HISTORY_LIMIT = 60;
@@ -279,6 +289,8 @@ export function EditorPage() {
   const [shapeFilled, setShapeFilled] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PageSearchResult[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
   const [insertTemplate, setInsertTemplate] = useState<PageTemplate>("ruled");
   const [saveState, setSaveState] = useState("All changes saved");
   const [titleDraft, setTitleDraft] = useState("");
@@ -584,7 +596,7 @@ export function EditorPage() {
       setLoading(true);
     }
     try {
-      const serverBundle = await api.getDocument(documentId);
+      const serverBundle = await api.getDocument(documentId, { lite: true });
       const skipDrafts = options?.skipDrafts ?? false;
       const localDrafts = skipDrafts ? new Map() : await getDraftsForDocument(documentId);
       pendingPageStateRef.current.clear();
@@ -684,6 +696,44 @@ export function EditorPage() {
   useEffect(() => {
     bundleRef.current = bundle;
   }, [bundle]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const trimmedQuery = searchQuery.trim();
+
+    if (!trimmedQuery) {
+      setSearchResults([]);
+      setSearchBusy(false);
+      return;
+    }
+
+    setSearchBusy(true);
+    const timer = window.setTimeout(() => {
+      void api
+        .searchDocument(documentId, trimmedQuery)
+        .then((payload) => {
+          if (!cancelled) {
+            setSearchResults(payload.results);
+          }
+        })
+        .catch((nextError) => {
+          console.error("[Inkflow] Document search failed.", nextError);
+          if (!cancelled) {
+            setSearchResults([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSearchBusy(false);
+          }
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [documentId, searchQuery]);
 
   useEffect(() => {
     loadDocument();
@@ -1393,9 +1443,16 @@ export function EditorPage() {
         return;
       }
 
-      loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1).catch(() => {
+      loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
         // Best-effort warm cache only.
       });
+      void prewarmPdfPagePreview(
+        sourceFile.url,
+        (page.sourcePageIndex ?? 0) + 1,
+        page.width,
+        page.height,
+        sourceFile.size
+      );
     });
   }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey]);
 
@@ -1469,9 +1526,6 @@ export function EditorPage() {
   const historyEntry = activePageId ? historyRef.current.get(activePageId) : undefined;
   const canUndo = Boolean(historyEntry?.past.length);
   const canRedo = Boolean(historyEntry?.future.length);
-  const searchResults = searchQuery.trim()
-    ? bundle.pages.filter((page) => getPageSearchText(page).toLowerCase().includes(searchQuery.trim().toLowerCase()))
-    : [];
   const visiblePageIdSet = new Set(visiblePageIds);
   const visiblePagePositions = bundle.pages
     .filter((page) => visiblePageIdSet.has(page.id))
@@ -1522,7 +1576,8 @@ export function EditorPage() {
 
   const thumbnailRailContent = shouldBuildThumbnails
     ? bundle.pages.map((page) => {
-        const thumbnailFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
+        const thumbnailFile = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId) : undefined;
+        const thumbnailFileUrl = thumbnailFile?.url;
         const shouldRenderPreview = previewWindow.has(page.id) || visibleCompactThumbnailIdSet.has(page.id);
 
         return (
@@ -1538,6 +1593,7 @@ export function EditorPage() {
               {page.kind === "pdf" && thumbnailFileUrl ? (
                 shouldRenderPreview ? (
                   <PdfThumbnail
+                    fileSize={thumbnailFile?.size}
                     height={page.height}
                     pageIndex={page.sourcePageIndex ?? 0}
                     url={thumbnailFileUrl}
@@ -1719,18 +1775,19 @@ export function EditorPage() {
         {searchResults.map((page) => (
           <button
             className="search-result"
-            key={page.id}
+            key={page.pageId}
             onClick={() => {
-              focusPage(page.id);
+              focusPage(page.pageId);
               setCompactActionsOpen(false);
             }}
             type="button"
           >
             <strong>Page {page.position}</strong>
-            <span>{excerptForSearch(page, searchQuery)}</span>
+            <span>{page.excerpt}</span>
           </button>
         ))}
-        {!searchResults.length && searchQuery.trim() ? <p className="muted-copy">No matching text yet.</p> : null}
+        {searchBusy ? <p className="muted-copy">Searching document...</p> : null}
+        {!searchBusy && !searchResults.length && searchQuery.trim() ? <p className="muted-copy">No matching text yet.</p> : null}
       </div>
     </>
   );
@@ -2157,7 +2214,8 @@ export function EditorPage() {
         <section className={`page-panel ${isCompactLayout ? "compact-page-panel" : ""}`} ref={pagePanelRef}>
           <div className="page-stack">
             {bundle.pages.map((page) => {
-              const pageFileUrl = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId)?.url : undefined;
+              const pageFile = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId) : undefined;
+              const pageFileUrl = pageFile?.url;
               const shouldRenderPage = renderedPageIdSet.has(page.id);
               const pageRenderMetrics = getPageRenderMetrics(page);
 
@@ -2172,6 +2230,7 @@ export function EditorPage() {
                     <EditorCanvas
                       annotationRevision={annotationRevisionRef.current.get(page.id) ?? 0}
                       color={inkColor}
+                      fileSize={pageFile?.size}
                       fileUrl={pageFileUrl}
                       onChange={(nextAnnotations) => setPageAnnotations(page.id, nextAnnotations)}
                       page={page}

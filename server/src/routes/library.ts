@@ -17,6 +17,7 @@ import {
   getStoredFile,
   insertBlankPage,
   insertPdfPages,
+  searchDocumentPages,
   renameDocument,
   setDocumentBookmark,
   toPublicDocumentBundle,
@@ -27,6 +28,7 @@ import { env } from "../lib/env.js";
 import { HttpError } from "../lib/http.js";
 import { asyncRoute } from "../lib/http.js";
 import { buildExportPdf, inspectPdf } from "../lib/pdf.js";
+import { maybeLinearizePdf } from "../lib/pdfOptimize.js";
 import { getUploadPath, persistUploadedPdf, tempUploadsDir } from "../lib/storage.js";
 import { broadcastAnnotationUpdate, broadcastDocumentChanged } from "../lib/sync.js";
 
@@ -137,7 +139,8 @@ libraryRouter.post("/documents/note", (request, response) => {
         template: parsed.data.template,
         pageCount: parsed.data.pageCount,
         coverColor: parsed.data.coverColor
-      })
+      }),
+      { includeBaseText: false }
     )
   );
 });
@@ -160,6 +163,7 @@ libraryRouter.post(
     const persisted = await persistUploadedPdf(request.file.path);
 
     try {
+      await maybeLinearizePdf(persisted.absolutePath, request.file.size);
       const inspected = await inspectPdf(persisted.absolutePath);
       const document = createImportedPdfDocument({
         title,
@@ -172,7 +176,7 @@ libraryRouter.post(
         pages: inspected.pages
       });
 
-      response.status(201).json(toPublicDocumentBundle(document));
+      response.status(201).json(toPublicDocumentBundle(document, { includeBaseText: false }));
     } catch (error) {
       await unlink(persisted.absolutePath).catch(() => undefined);
       throw error;
@@ -184,9 +188,18 @@ libraryRouter.get(
   "/documents/:documentId",
   asyncRoute(async (request, response) => {
     const documentId = String(request.params.documentId);
-    response.json(toPublicDocumentBundle(getDocumentBundle(documentId)));
+    const includeBaseText = request.query.lite !== "1";
+    response.json(toPublicDocumentBundle(getDocumentBundle(documentId, { includeBaseText }), { includeBaseText }));
   })
 );
+
+libraryRouter.get("/documents/:documentId/search", (request, response) => {
+  const documentId = String(request.params.documentId);
+  const query = typeof request.query.q === "string" ? request.query.q : "";
+  response.json({
+    results: searchDocumentPages(documentId, query)
+  });
+});
 
 libraryRouter.patch("/documents/:documentId", (request, response) => {
   const parsed = renameSchema.safeParse(request.body);
@@ -196,7 +209,7 @@ libraryRouter.patch("/documents/:documentId", (request, response) => {
   }
 
   const documentId = String(request.params.documentId);
-  response.json(toPublicDocumentBundle(renameDocument(documentId, parsed.data.title)));
+  response.json(toPublicDocumentBundle(renameDocument(documentId, parsed.data.title), { includeBaseText: false }));
 });
 
 libraryRouter.patch("/documents/:documentId/bookmark", (request, response) => {
@@ -208,7 +221,7 @@ libraryRouter.patch("/documents/:documentId/bookmark", (request, response) => {
 
   const documentId = String(request.params.documentId);
   const senderId = String(request.headers["x-sync-client-id"] ?? "");
-  const result = toPublicDocumentBundle(setDocumentBookmark(documentId, parsed.data.pageId));
+  const result = toPublicDocumentBundle(setDocumentBookmark(documentId, parsed.data.pageId), { includeBaseText: false });
   broadcastDocumentChanged(documentId, senderId);
   response.json(result);
 });
@@ -252,7 +265,8 @@ libraryRouter.post("/documents/:documentId/pages/insert", (request, response) =>
       anchorPageId: parsed.data.anchorPageId,
       placement: parsed.data.placement,
       template: parsed.data.template
-    })
+    }),
+    { includeBaseText: false }
   );
   broadcastDocumentChanged(documentId, senderId);
   response.status(201).json(result);
@@ -280,6 +294,7 @@ libraryRouter.post(
     const persisted = await persistUploadedPdf(request.file.path);
 
     try {
+      await maybeLinearizePdf(persisted.absolutePath, request.file.size);
       const inspected = await inspectPdf(persisted.absolutePath);
 
       // Determine which page indices to insert
@@ -307,7 +322,8 @@ libraryRouter.post(
           fileSize: request.file.size,
           pages: inspected.pages,
           pageIndices
-        })
+        }),
+        { includeBaseText: false }
       );
       broadcastDocumentChanged(documentId, senderId);
       response.status(201).json(result);
@@ -322,7 +338,7 @@ libraryRouter.delete("/pages/:pageId", (request, response) => {
   const pageId = String(request.params.pageId);
   const documentId = getPageDocumentId(pageId) ?? "";
   const senderId = String(request.headers["x-sync-client-id"] ?? "");
-  const result = toPublicDocumentBundle(deletePage(pageId));
+  const result = toPublicDocumentBundle(deletePage(pageId), { includeBaseText: false });
   broadcastDocumentChanged(documentId, senderId);
   response.json(result);
 });

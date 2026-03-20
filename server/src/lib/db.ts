@@ -150,6 +150,12 @@ export interface PagePayload {
   updatedAt: string;
 }
 
+export interface PageSearchResultPayload {
+  pageId: string;
+  position: number;
+  excerpt: string;
+}
+
 export interface DocumentBundle {
   document: DocumentSummaryPayload;
   files: Array<FilePayload & { storageKey: string }>;
@@ -284,7 +290,7 @@ function mapFile(row: FileRow): FilePayload & { storageKey: string } {
   };
 }
 
-function mapPage(row: PageRow): PagePayload {
+function mapPage(row: PageRow, options?: { includeBaseText?: boolean }): PagePayload {
   return {
     id: row.id,
     position: row.position,
@@ -295,11 +301,34 @@ function mapPage(row: PageRow): PagePayload {
     width: row.width,
     height: row.height,
     annotations: parseAnnotations(row.annotations_json),
-    baseText: row.base_text,
+    baseText: options?.includeBaseText === false ? "" : row.base_text,
     annotationText: row.annotation_text,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function buildSearchExcerpt(text: string, query: string): string {
+  const normalizedText = text.trim();
+  if (!normalizedText) {
+    return "";
+  }
+
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return normalizedText.slice(0, 140);
+  }
+
+  const matchIndex = normalizedText.toLowerCase().indexOf(normalizedQuery);
+  if (matchIndex < 0) {
+    return normalizedText.slice(0, 140);
+  }
+
+  const start = Math.max(0, matchIndex - 40);
+  const end = Math.min(normalizedText.length, matchIndex + normalizedQuery.length + 80);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < normalizedText.length ? "..." : "";
+  return `${prefix}${normalizedText.slice(start, end)}${suffix}`;
 }
 
 function updateDocumentMetadata(documentId: string): void {
@@ -491,7 +520,7 @@ export function createImportedPdfDocument(options: {
   return getDocumentBundle(documentId);
 }
 
-export function getDocumentBundle(documentId: string): DocumentBundle {
+export function getDocumentBundle(documentId: string, options?: { includeBaseText?: boolean }): DocumentBundle {
   const documentRow = getDocumentRow(documentId);
   if (!documentRow) {
     throw new HttpError(404, "Document not found.");
@@ -503,8 +532,45 @@ export function getDocumentBundle(documentId: string): DocumentBundle {
   return {
     document: mapDocument(documentRow),
     files: fileRows.map(mapFile),
-    pages: pageRows.map(mapPage)
+    pages: pageRows.map((row) => mapPage(row, options))
   };
+}
+
+export function searchDocumentPages(documentId: string, query: string, limit = 40): PageSearchResultPayload[] {
+  const documentRow = getDocumentRow(documentId);
+  if (!documentRow) {
+    throw new HttpError(404, "Document not found.");
+  }
+
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const rows = db.prepare(
+    `
+      SELECT id, position, base_text, annotation_text
+      FROM pages
+      WHERE document_id = ?
+        AND instr(lower(base_text || ' ' || annotation_text), ?) > 0
+      ORDER BY position ASC
+      LIMIT ?
+    `
+  ).all(documentId, normalizedQuery, limit) as Array<{
+    id: string;
+    position: number;
+    base_text: string;
+    annotation_text: string;
+  }>;
+
+  return rows.map((row) => {
+    const searchText = `${row.base_text} ${row.annotation_text}`.trim();
+    return {
+      pageId: row.id,
+      position: row.position,
+      excerpt: buildSearchExcerpt(searchText, normalizedQuery)
+    };
+  });
 }
 
 export function renameDocument(documentId: string, title: string): DocumentBundle {
@@ -898,9 +964,16 @@ export function getStoredFile(fileId: string): (FilePayload & { storageKey: stri
   };
 }
 
-export function toPublicDocumentBundle(bundle: DocumentBundle) {
+export function toPublicDocumentBundle(bundle: DocumentBundle, options?: { includeBaseText?: boolean }) {
   return {
     ...bundle,
-    files: bundle.files.map(({ storageKey: _storageKey, ...file }) => file)
+    files: bundle.files.map(({ storageKey: _storageKey, ...file }) => file),
+    pages:
+      options?.includeBaseText === false
+        ? bundle.pages.map((page) => ({
+            ...page,
+            baseText: ""
+          }))
+        : bundle.pages
   };
 }

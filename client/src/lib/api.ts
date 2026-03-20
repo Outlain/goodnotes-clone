@@ -1,4 +1,4 @@
-import type { Annotation, DocumentBundle, LibraryPayload, PageTemplate, SessionStatus } from "../types";
+import type { Annotation, DocumentBundle, LibraryPayload, PageSearchResult, PageTemplate, SessionStatus } from "../types";
 
 class ApiError extends Error {
   status: number;
@@ -70,7 +70,10 @@ export const api = {
     request<{ success: boolean }>(`/api/folders/${folderId}`, {
       method: "DELETE"
     }),
-  getDocument: (documentId: string) => request<DocumentBundle>(`/api/documents/${documentId}`),
+  getDocument: (documentId: string, options?: { lite?: boolean }) =>
+    request<DocumentBundle>(`/api/documents/${documentId}${options?.lite ? "?lite=1" : ""}`),
+  searchDocument: (documentId: string, query: string) =>
+    request<{ results: PageSearchResult[] }>(`/api/documents/${documentId}/search?q=${encodeURIComponent(query)}`),
   renameDocument: (documentId: string, title: string) =>
     request<DocumentBundle>(`/api/documents/${documentId}`, {
       method: "PATCH",
