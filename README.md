@@ -47,7 +47,7 @@ npm --prefix client install
 3. In one terminal, run the API with environment variables in the shell:
 
 ```bash
-PORT=3000 DATA_DIR=./data PDF_UPLOAD_LIMIT_MB=512 PDF_LINEARIZE_UPLOADS=true PDF_OPTIMIZE_EXISTING_ON_STARTUP=true PDF_PREGENERATE_PREVIEW_COUNT=8 PDF_THUMBNAIL_WIDTH=240 SESSION_SECRET=development-session-secret APP_PASSWORD= npm run dev:server
+PORT=3000 DATA_DIR=./data PDF_UPLOAD_LIMIT_MB=512 PDF_LINEARIZE_UPLOADS=true PDF_OPTIMIZE_EXISTING_ON_STARTUP=true PDF_PREGENERATE_PREVIEW_COUNT=8 PDF_THUMBNAIL_WIDTH=240 PDF_PAGE_PREVIEW_WIDTHS=240,1000,1400 SESSION_SECRET=development-session-secret APP_PASSWORD= npm run dev:server
 ```
 
 4. In another terminal, run the web app:
@@ -123,6 +123,7 @@ environment:
   PDF_OPTIMIZE_EXISTING_ON_STARTUP: "true"
   PDF_PREGENERATE_PREVIEW_COUNT: "8"
   PDF_THUMBNAIL_WIDTH: "240"
+  PDF_PAGE_PREVIEW_WIDTHS: "240,1000,1400"
   SESSION_SECRET: change-this-to-a-long-random-secret
   APP_PASSWORD: ""
 ```
@@ -210,6 +211,7 @@ services:
       PDF_OPTIMIZE_EXISTING_ON_STARTUP: "true"
       PDF_PREGENERATE_PREVIEW_COUNT: "8"
       PDF_THUMBNAIL_WIDTH: "240"
+      PDF_PAGE_PREVIEW_WIDTHS: "240,1000,1400"
       SESSION_SECRET: replace-this-with-a-long-random-secret
       APP_PASSWORD: ""
     volumes:
@@ -232,6 +234,7 @@ For most deployments you only need to change:
 - `PDF_OPTIMIZE_EXISTING_ON_STARTUP`: when `true`, Inkflow scans already-uploaded PDFs in the background after startup and builds missing optimization assets.
 - `PDF_PREGENERATE_PREVIEW_COUNT`: how many early pages of each PDF should be pre-rendered into cached preview images.
 - `PDF_THUMBNAIL_WIDTH`: width in pixels for cached preview images used by thumbnail rails and first-load placeholders.
+- `PDF_PAGE_PREVIEW_WIDTHS`: comma-separated cached preview widths for multi-resolution first-load page placeholders. Default is `240,1000,1400`.
 - `SESSION_SECRET`: secret key used to sign the session cookie after login
 - `APP_PASSWORD`: optional shared password for the deployment. Leave blank to disable the login screen.
 
@@ -257,7 +260,7 @@ Practical guidance:
 - Inkflow now uses a more aggressive large-file PDF loading profile in the browser, plus background low-resolution page warming, so visible pages can appear faster while sharp renders catch up
 - if `PDF_LINEARIZE_UPLOADS=true`, the server will try to optimize larger uploads with `qpdf`, which can improve first-page and random-page loading
 - if `PDF_OPTIMIZE_EXISTING_ON_STARTUP=true`, the server will also re-check older uploads in the background after boot and build any missing optimization assets without blocking the app
-- Inkflow now supports cached server-generated preview images, which reduces browser-side thumbnail rendering work and makes first-open feel faster on large PDFs
+- Inkflow now supports cached server-generated preview images, including multiple page-preview widths, which reduces browser-side thumbnail rendering work and makes first-open feel faster on large PDFs
 - enabling PDF "Fast Web View" / linearization before upload can improve initial remote loading because the browser PDF renderer can use byte-range requests more effectively
 - if a source PDF is still awkward to work with, splitting it into chapter PDFs and inserting them into one Inkflow document is a workable fallback because the app can keep them in one continuous note flow
 

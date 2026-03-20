@@ -5,7 +5,7 @@ import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
 import { collectAnnotationText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
-import { loadPdfPage, prewarmPdfPagePreview } from "../lib/pdf";
+import { loadPdfPage, preloadPreviewImage, prewarmPdfPagePreview, resolvePreviewWidthBucket } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
 import type {
@@ -1443,6 +1443,11 @@ export function EditorPage() {
         return;
       }
 
+      const pagePreviewUrl = getPagePreviewUrl(sourceFile.id, page.sourcePageIndex, getPageRenderMetrics(page).stageWidth);
+      const thumbnailPreviewUrl = getThumbnailPreviewUrl(sourceFile.id, page.sourcePageIndex);
+
+      void preloadPreviewImage(pagePreviewUrl);
+      void preloadPreviewImage(thumbnailPreviewUrl);
       loadPdfPage(sourceFile.url, (page.sourcePageIndex ?? 0) + 1, sourceFile.size).catch(() => {
         // Best-effort warm cache only.
       });
@@ -1563,11 +1568,11 @@ export function EditorPage() {
   const pageShellPaddingPx = isCompactLayout ? 0 : 32;
 
   function getThumbnailPreviewUrl(fileId: string, sourcePageIndex: number | null): string {
-    return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=240`;
+    return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=${resolvePreviewWidthBucket(240)}`;
   }
 
   function getPagePreviewUrl(fileId: string, sourcePageIndex: number | null, stageWidth: number): string {
-    const bucketedWidth = Math.max(700, Math.min(1500, Math.round(stageWidth / 200) * 200 || 1000));
+    const bucketedWidth = resolvePreviewWidthBucket(stageWidth);
     return `/api/files/${fileId}/pages/${(sourcePageIndex ?? 0) + 1}/preview?width=${bucketedWidth}`;
   }
 

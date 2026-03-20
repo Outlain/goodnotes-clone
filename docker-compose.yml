@@ -23,6 +23,8 @@ services:
       PDF_PREGENERATE_PREVIEW_COUNT: "8"
       # Width of cached sidebar/page preview images in pixels
       PDF_THUMBNAIL_WIDTH: "240"
+      # Comma-separated cached preview widths for multi-resolution first-open placeholders
+      PDF_PAGE_PREVIEW_WIDTHS: "240,1000,1400"
       # Replace this with your own long random secret before deploying
       SESSION_SECRET: change-this-to-a-long-random-secret
       # Optional. Leave blank to disable the login screen

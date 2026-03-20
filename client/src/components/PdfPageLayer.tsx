@@ -146,9 +146,11 @@ function PdfPageLayerInner({ pageIndex, url, fileSize, previewUrl, width, height
 
   return (
     <>
-      {previewUrl && (isLoading || Boolean(error)) ? <img alt="" className="page-preview-image" src={previewUrl} /> : null}
+      {previewUrl && (isLoading || Boolean(error)) ? (
+        <img alt="" className="page-preview-image" decoding="async" src={previewUrl} />
+      ) : null}
       <canvas className="pdf-canvas" ref={canvasRef} />
-      {isLoading && !error ? <div className="page-fallback">Loading PDF page...</div> : null}
+      {isLoading && !error && !previewUrl ? <div className="page-fallback">Loading PDF page...</div> : null}
       {error ? <div className="page-fallback">PDF preview failed: {error}</div> : null}
     </>
   );

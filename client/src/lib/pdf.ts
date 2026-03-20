@@ -5,6 +5,8 @@ GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", i
 const pdfCache = new Map<string, Promise<PDFDocumentProxy>>();
 const pdfPageCache = new Map<string, Map<number, Promise<PDFPageProxy>>>();
 const previewWarmTaskCache = new Map<string, Promise<void>>();
+const previewImageWarmCache = new Map<string, Promise<void>>();
+const PREVIEW_WIDTH_BUCKETS = [240, 1000, 1400];
 
 class CanvasSnapshotCache {
   private totalPixels = 0;
@@ -117,6 +119,12 @@ function previewCacheKey(url: string, pageNumber: number): string {
   return `${url}|${pageNumber}|preview`;
 }
 
+export function resolvePreviewWidthBucket(requestedWidth: number): number {
+  const safeRequestedWidth = Math.max(120, Math.min(1800, Math.round(requestedWidth)));
+  const matchingWidth = PREVIEW_WIDTH_BUCKETS.find((width) => width >= safeRequestedWidth);
+  return matchingWidth ?? PREVIEW_WIDTH_BUCKETS[PREVIEW_WIDTH_BUCKETS.length - 1];
+}
+
 export function loadPdf(url: string, fileSize?: number): Promise<PDFDocumentProxy> {
   const profile = resolvePdfLoadProfile(fileSize);
   const cacheKey = pdfCacheKey(url, fileSize);
@@ -188,6 +196,30 @@ export function storePageSnapshot(key: string, sourceCanvas: HTMLCanvasElement):
 
 export function getCachedPreviewSnapshot(url: string, pageNumber: number): HTMLCanvasElement | undefined {
   return previewSnapshotCache.get(previewCacheKey(url, pageNumber));
+}
+
+export function preloadPreviewImage(url: string): Promise<void> {
+  if (!url || typeof Image === "undefined") {
+    return Promise.resolve();
+  }
+
+  const existingTask = previewImageWarmCache.get(url);
+  if (existingTask) {
+    return existingTask;
+  }
+
+  const task = new Promise<void>((resolve) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => resolve();
+    image.onerror = () => resolve();
+    image.src = url;
+  }).finally(() => {
+    previewImageWarmCache.delete(url);
+  });
+
+  previewImageWarmCache.set(url, task);
+  return task;
 }
 
 export async function prewarmPdfPagePreview(

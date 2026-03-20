@@ -12,6 +12,7 @@ let workerRunning = false;
 
 async function optimizeStoredFile(file: StoredFileRecord): Promise<void> {
   const sourcePath = getUploadPath(file.storageKey);
+  const previewWidths = [...new Set([env.pdfThumbnailWidth, ...env.pdfPagePreviewWidths])].sort((left, right) => left - right);
 
   try {
     const alreadyOptimized = await wasUploadOptimized(file.storageKey);
@@ -21,7 +22,9 @@ async function optimizeStoredFile(file: StoredFileRecord): Promise<void> {
 
     const previewCount = Math.min(env.pdfPregeneratePreviewCount, file.pageCount);
     for (let pageNumber = 1; pageNumber <= previewCount; pageNumber += 1) {
-      await ensurePdfPreviewImage(file.storageKey, sourcePath, pageNumber, env.pdfThumbnailWidth);
+      for (const previewWidth of previewWidths) {
+        await ensurePdfPreviewImage(file.storageKey, sourcePath, pageNumber, previewWidth);
+      }
     }
 
     if (!alreadyOptimized) {

@@ -31,7 +31,7 @@ import { asyncRoute } from "../lib/http.js";
 import { startBackgroundPdfMaintenance, enqueuePdfOptimization } from "../lib/pdfMaintenance.js";
 import { buildExportPdf, inspectPdf } from "../lib/pdf.js";
 import { maybeLinearizePdf } from "../lib/pdfOptimize.js";
-import { ensurePdfPreviewImage } from "../lib/pdfPreview.js";
+import { ensurePdfPreviewImage, resolvePreviewWidth } from "../lib/pdfPreview.js";
 import { getUploadPath, persistUploadedPdf, removePreviewCacheForUpload, tempUploadsDir } from "../lib/storage.js";
 import { broadcastAnnotationUpdate, broadcastDocumentChanged } from "../lib/sync.js";
 
@@ -428,12 +428,13 @@ libraryRouter.get(
       throw new HttpError(400, "Invalid PDF page number.");
     }
 
-    const width = Math.max(120, Math.min(1800, Number(request.query.width) || env.pdfThumbnailWidth));
+    const width = resolvePreviewWidth(Number(request.query.width) || env.pdfThumbnailWidth);
     const previewPath = await ensurePdfPreviewImage(file.storageKey, getUploadPath(file.storageKey), pageNumber, width);
 
     response.type("image/jpeg");
     response.setHeader("Content-Disposition", "inline");
     response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Inkflow-Preview-Width", String(width));
     response.sendFile(previewPath);
   })
 );

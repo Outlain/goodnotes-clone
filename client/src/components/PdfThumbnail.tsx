@@ -136,6 +136,7 @@ function PdfThumbnailInner({ pageIndex, url, fileSize, previewUrl, width, height
         <img
           alt=""
           className="thumbnail-image"
+          decoding="async"
           loading="lazy"
           onError={() => setUseCanvasFallback(true)}
           src={previewUrl}
