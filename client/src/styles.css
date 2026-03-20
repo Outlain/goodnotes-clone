@@ -269,7 +269,6 @@ a {
   width: 100%;
   display: flex;
   justify-content: center;
-  contain: layout style paint;
 }
 
 .page-stack-item.active .page-stage {

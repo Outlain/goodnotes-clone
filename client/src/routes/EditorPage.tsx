@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { EditorCanvas } from "../components/EditorCanvas";
 import { PdfThumbnail } from "../components/PdfThumbnail";
@@ -381,24 +381,31 @@ export function EditorPage() {
     });
   }
 
-  function flushPendingVisiblePages(): void {
-    const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
-      .sort((left, right) => right[1] - left[1])
-      .map(([pageId]) => pageId);
-
-    setVisiblePageIds((current) => {
-      if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
-        return current;
-      }
-      return sortedVisibleIds;
-    });
-  }
-
   function setTouchScrollActive(nextValue: boolean): void {
     touchScrollActiveRef.current = nextValue;
     if (!nextValue) {
-      flushPendingVisiblePages();
-      flushPendingActivePage();
+      // Batch ALL scroll-end state updates in a single startTransition
+      // so React can yield to the browser's scroll handling between frames.
+      // Without this, the re-render for 1500 pages blocks the main thread.
+      startTransition(() => {
+        const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
+          .sort((left, right) => right[1] - left[1])
+          .map(([pageId]) => pageId);
+
+        setVisiblePageIds((current) => {
+          if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
+            return current;
+          }
+          return sortedVisibleIds;
+        });
+
+        const pendingActivePageId = pendingActivePageIdRef.current;
+        if (pendingActivePageId && pendingActivePageId !== activePageIdRef.current) {
+          pendingActivePageIdRef.current = null;
+          activePageIdRef.current = pendingActivePageId;
+          setActivePageId(pendingActivePageId);
+        }
+      });
     }
   }
 
@@ -1494,8 +1501,10 @@ export function EditorPage() {
           (hydratedPageIdSet.has(page.id) || Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS)
       );
 
+      const localFileMap = new Map(bundle!.files.map((f) => [f.id, f]));
+
       function warmPage(page: PageRecord): void {
-        const sourceFile = bundle!.files.find((file) => file.id === page.sourceFileId);
+        const sourceFile = page.sourceFileId ? localFileMap.get(page.sourceFileId) : undefined;
         if (!sourceFile) {
           return;
         }
@@ -1655,8 +1664,17 @@ export function EditorPage() {
     );
   }
 
+  // Pre-compute file lookup map: O(m) once instead of O(n*m) in the page loop
+  const fileMap = useMemo(() => {
+    const map = new Map<string, (typeof bundle.files)[0]>();
+    for (const file of bundle.files) {
+      map.set(file.id, file);
+    }
+    return map;
+  }, [bundle.files]);
+
   const activePage = bundle.pages.find((page) => page.id === activePageId) ?? bundle.pages[0];
-  const activeFile = bundle.files.find((file) => file.id === activePage?.sourceFileId);
+  const activeFile = activePage?.sourceFileId ? fileMap.get(activePage.sourceFileId) : undefined;
   const bookmarkPage = bundle.document.bookmarkPageId
     ? bundle.pages.find((page) => page.id === bundle.document.bookmarkPageId) ?? null
     : null;
@@ -1664,34 +1682,45 @@ export function EditorPage() {
   const historyEntry = activePageId ? historyRef.current.get(activePageId) : undefined;
   const canUndo = Boolean(historyEntry?.past.length);
   const canRedo = Boolean(historyEntry?.future.length);
-  const visiblePageIdSet = new Set(visiblePageIds);
-  const visiblePagePositions = bundle.pages
-    .filter((page) => visiblePageIdSet.has(page.id))
-    .map((page) => page.position);
-  const renderAnchorMin = visiblePagePositions.length
-    ? Math.min(...visiblePagePositions)
-    : activePage?.position ?? bundle.pages[0]?.position ?? 1;
-  const renderAnchorMax = visiblePagePositions.length
-    ? Math.max(...visiblePagePositions)
-    : activePage?.position ?? bundle.pages[0]?.position ?? 1;
-  const previewWindow = new Set(
-    activePage
-      ? bundle.pages
-          .filter((page) => Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS)
-          .map((page) => page.id)
-      : []
-  );
-  const hydratedPageIdSet = new Set(hydratedPageIds);
-  const renderedPageIdSet = new Set(
-    bundle.pages
-      .filter(
-        (page) =>
-          hydratedPageIdSet.has(page.id) ||
-          visiblePageIdSet.has(page.id) ||
-          (page.position >= renderAnchorMin - RENDER_AHEAD_RADIUS && page.position <= renderAnchorMax + RENDER_AHEAD_RADIUS)
-      )
-      .map((page) => page.id)
-  );
+
+  // Memoize expensive set computations that depend on scroll state
+  const renderedPageIdSet = useMemo(() => {
+    const visibleSet = new Set(visiblePageIds);
+    const hydratedSet = new Set(hydratedPageIds);
+
+    let minPos = activePage?.position ?? bundle.pages[0]?.position ?? 1;
+    let maxPos = minPos;
+    for (const page of bundle.pages) {
+      if (visibleSet.has(page.id)) {
+        if (page.position < minPos) minPos = page.position;
+        if (page.position > maxPos) maxPos = page.position;
+      }
+    }
+
+    const result = new Set<string>();
+    for (const page of bundle.pages) {
+      if (
+        hydratedSet.has(page.id) ||
+        visibleSet.has(page.id) ||
+        (page.position >= minPos - RENDER_AHEAD_RADIUS && page.position <= maxPos + RENDER_AHEAD_RADIUS)
+      ) {
+        result.add(page.id);
+      }
+    }
+    return result;
+  }, [activePage, bundle.pages, hydratedPageIds, visiblePageIds]);
+
+  const previewWindow = useMemo(() => {
+    if (!activePage) return new Set<string>();
+    const set = new Set<string>();
+    for (const page of bundle.pages) {
+      if (Math.abs(page.position - activePage.position) <= THUMBNAIL_PREVIEW_RADIUS) {
+        set.add(page.id);
+      }
+    }
+    return set;
+  }, [activePage, bundle.pages]);
+
   const compactSaveLabel = saveState === "All changes saved" ? "Saved" : saveState;
   const compactInkColors = inkColors.filter(
     (candidate) => candidate === inkColors[0] || candidate === inkColors[1] || candidate === inkColors[5] || candidate === inkColor
@@ -1723,7 +1752,7 @@ export function EditorPage() {
 
   const thumbnailRailContent = shouldBuildThumbnails
     ? bundle.pages.map((page) => {
-        const thumbnailFile = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId) : undefined;
+        const thumbnailFile = page.sourceFileId ? fileMap.get(page.sourceFileId) : undefined;
         const thumbnailFileUrl = thumbnailFile?.url;
         const shouldRenderPreview = previewWindow.has(page.id) || visibleCompactThumbnailIdSet.has(page.id);
 
@@ -2362,7 +2391,7 @@ export function EditorPage() {
         <section className={`page-panel ${isCompactLayout ? "compact-page-panel" : ""} ${isCompactLayout && !compactHeaderVisible ? "compact-page-panel-full" : ""}`} ref={pagePanelRef}>
           <div className="page-stack">
             {bundle.pages.map((page) => {
-              const pageFile = page.sourceFileId ? bundle.files.find((file) => file.id === page.sourceFileId) : undefined;
+              const pageFile = page.sourceFileId ? fileMap.get(page.sourceFileId) : undefined;
               const pageFileUrl = pageFile?.url;
               const shouldRenderPage = renderedPageIdSet.has(page.id);
               const pageRenderMetrics = getPageRenderMetrics(page);
