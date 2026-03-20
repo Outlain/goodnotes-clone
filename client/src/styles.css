@@ -269,6 +269,8 @@ a {
   width: 100%;
   display: flex;
   justify-content: center;
+  contain: layout style paint;
+  content-visibility: auto;
 }
 
 .page-stack-item.active .page-stage {
@@ -299,6 +301,21 @@ a {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+.pdf-canvas {
+  transition: opacity 0.15s ease-out;
+}
+
+.page-skeleton {
+  background: linear-gradient(90deg, #fffdf7 25%, #f5f0e8 50%, #fffdf7 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .page-paper {

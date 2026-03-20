@@ -12,7 +12,11 @@ class CanvasSnapshotCache {
   private totalPixels = 0;
   private readonly entries = new Map<string, { canvas: HTMLCanvasElement; pixels: number }>();
 
-  constructor(private readonly maxPixels: number) {}
+  constructor(private maxPixels: number) {}
+
+  resize(newMaxPixels: number): void {
+    this.maxPixels = Math.max(this.maxPixels, newMaxPixels);
+  }
 
   get(key: string): HTMLCanvasElement | undefined {
     const entry = this.entries.get(key);
@@ -282,4 +286,16 @@ export function getCachedThumbnailSnapshot(key: string): HTMLCanvasElement | und
 
 export function storeThumbnailSnapshot(key: string, sourceCanvas: HTMLCanvasElement): void {
   thumbnailSnapshotCache.set(key, sourceCanvas);
+}
+
+export function scaleCachesForDocument(pageCount: number): void {
+  if (pageCount > 500) {
+    pageSnapshotCache.resize(80_000_000);
+    previewSnapshotCache.resize(28_000_000);
+    thumbnailSnapshotCache.resize(16_000_000);
+  } else if (pageCount > 100) {
+    pageSnapshotCache.resize(60_000_000);
+    previewSnapshotCache.resize(20_000_000);
+    thumbnailSnapshotCache.resize(14_000_000);
+  }
 }

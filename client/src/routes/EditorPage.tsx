@@ -5,7 +5,7 @@ import { PdfThumbnail } from "../components/PdfThumbnail";
 import { api } from "../lib/api";
 import { collectAnnotationText } from "../lib/annotations";
 import { deleteDraft, getDraftsForDocument, saveDraft } from "../lib/drafts";
-import { loadPdfPage, preloadPreviewImage, prewarmPdfPagePreview, resolvePreviewWidthBucket } from "../lib/pdf";
+import { loadPdfPage, preloadPreviewImage, prewarmPdfPagePreview, resolvePreviewWidthBucket, scaleCachesForDocument } from "../lib/pdf";
 import { saveAnnotationsInWorker } from "../lib/saveWorkerClient";
 import { SyncClient } from "../lib/syncClient";
 import type {
@@ -266,6 +266,9 @@ export function EditorPage() {
   const pendingInitialFocusPageIdRef = useRef<string | null>(null);
   const touchScrollActiveRef = useRef(false);
   const touchScrollEndTimerRef = useRef<number | null>(null);
+  const scrollVelocityRef = useRef(0);
+  const lastScrollTopRef = useRef(0);
+  const lastScrollTimeRef = useRef(0);
   const saveTimerRef = useRef<number | null>(null);
   const draftPersistTimerRef = useRef<number | null>(null);
   const bundleFlushTimerRef = useRef<number | null>(null);
@@ -652,6 +655,7 @@ export function EditorPage() {
           : serverBundle;
 
       bundleRef.current = nextBundle;
+      scaleCachesForDocument(nextBundle.pages.length);
       setBundle(nextBundle);
       setTitleDraft(nextBundle.document.title);
       const bookmarkPageId =
@@ -886,13 +890,25 @@ export function EditorPage() {
       touchScrollEndTimerRef.current = window.setTimeout(() => {
         touchScrollEndTimerRef.current = null;
         setTouchScrollActive(false);
+        scrollVelocityRef.current = 0;
       }, 140);
+    };
+
+    const trackScrollVelocity = () => {
+      const now = performance.now();
+      const dt = now - lastScrollTimeRef.current;
+      if (dt > 0 && dt < 500) {
+        scrollVelocityRef.current = (pagePanelNode.scrollTop - lastScrollTopRef.current) / dt;
+      }
+      lastScrollTopRef.current = pagePanelNode.scrollTop;
+      lastScrollTimeRef.current = now;
     };
 
     pagePanelNode.addEventListener("touchstart", markScrollActivity, { passive: true });
     pagePanelNode.addEventListener("touchend", markScrollActivity, { passive: true });
     pagePanelNode.addEventListener("touchcancel", markScrollActivity, { passive: true });
     pagePanelNode.addEventListener("scroll", markScrollActivity, { passive: true });
+    pagePanelNode.addEventListener("scroll", trackScrollVelocity, { passive: true });
 
     return () => {
       if (touchScrollEndTimerRef.current != null) {
@@ -903,6 +919,7 @@ export function EditorPage() {
       pagePanelNode.removeEventListener("touchend", markScrollActivity);
       pagePanelNode.removeEventListener("touchcancel", markScrollActivity);
       pagePanelNode.removeEventListener("scroll", markScrollActivity);
+      pagePanelNode.removeEventListener("scroll", trackScrollVelocity);
       setTouchScrollActive(false);
     };
   }, [documentId, loading, isCompactLayout]);
@@ -1410,11 +1427,25 @@ export function EditorPage() {
 
     const minPosition = visiblePositions.length ? Math.min(...visiblePositions) : anchorPage.position;
     const maxPosition = visiblePositions.length ? Math.max(...visiblePositions) : anchorPage.position;
-    const radius = visiblePositions.length ? HYDRATED_RENDER_RADIUS : INITIAL_HYDRATE_RADIUS;
+    const baseRadius = visiblePositions.length ? HYDRATED_RENDER_RADIUS : INITIAL_HYDRATE_RADIUS;
+
+    // Bias hydration toward scroll direction for smoother fast scrolling
+    const velocity = scrollVelocityRef.current;
+    const scrollDir = velocity > 0.15 ? 1 : velocity < -0.15 ? -1 : 0;
+    const forwardBias = scrollDir !== 0 ? 3 : 0;
+    const backwardPenalty = scrollDir !== 0 ? 2 : 0;
 
     rememberHydratedPages(
       bundle.pages
-        .filter((page) => page.position >= minPosition - radius && page.position <= maxPosition + radius)
+        .filter((page) => {
+          if (scrollDir > 0) {
+            return page.position >= minPosition - (baseRadius - backwardPenalty) && page.position <= maxPosition + (baseRadius + forwardBias);
+          }
+          if (scrollDir < 0) {
+            return page.position >= minPosition - (baseRadius + forwardBias) && page.position <= maxPosition + (baseRadius - backwardPenalty);
+          }
+          return page.position >= minPosition - baseRadius && page.position <= maxPosition + baseRadius;
+        })
         .map((page) => page.id)
     );
   }, [activePageId, bundle, pageStructureKey, visiblePageIds]);
@@ -1437,8 +1468,8 @@ export function EditorPage() {
         (hydratedPageIdSet.has(page.id) || Math.abs(page.position - currentPage.position) <= PREFETCH_RADIUS)
     );
 
-    warmPages.forEach((page) => {
-      const sourceFile = bundle.files.find((file) => file.id === page.sourceFileId);
+    function warmPage(page: PageRecord): void {
+      const sourceFile = bundle!.files.find((file) => file.id === page.sourceFileId);
       if (!sourceFile) {
         return;
       }
@@ -1458,7 +1489,40 @@ export function EditorPage() {
         page.height,
         sourceFile.size
       );
+    }
+
+    // Urgent: pages within 2 positions — warm immediately
+    const urgent: PageRecord[] = [];
+    const deferred: PageRecord[] = [];
+    for (const page of warmPages) {
+      if (Math.abs(page.position - currentPage.position) <= 2) {
+        urgent.push(page);
+      } else {
+        deferred.push(page);
+      }
+    }
+
+    urgent.forEach(warmPage);
+
+    // Deferred: warm during idle time to avoid blocking scroll
+    const idleIds: number[] = [];
+    deferred.forEach((page, i) => {
+      if (typeof requestIdleCallback === "function") {
+        idleIds.push(requestIdleCallback(() => warmPage(page)));
+      } else {
+        idleIds.push(window.setTimeout(() => warmPage(page), 50 * (i + 1)) as unknown as number);
+      }
     });
+
+    return () => {
+      idleIds.forEach((id) => {
+        if (typeof cancelIdleCallback === "function") {
+          cancelIdleCallback(id);
+        } else {
+          clearTimeout(id);
+        }
+      });
+    };
   }, [activePageId, fileStructureKey, hydratedPageIds, pageStructureKey]);
 
   useEffect(() => {
@@ -2241,6 +2305,7 @@ export function EditorPage() {
                   data-page-id={page.id}
                   key={page.id}
                   ref={(node) => setPageNode(page.id, node)}
+                  style={{ containIntrinsicBlockSize: `auto ${pageRenderMetrics.stageHeight + 32}px` }}
                 >
                   {shouldRenderPage ? (
                     <EditorCanvas
@@ -2264,13 +2329,25 @@ export function EditorPage() {
                   ) : (
                     <div className="page-stage-shell">
                       <div
-                        className="page-placeholder"
+                        className="page-stage"
                         style={{
                           width: `${pageRenderMetrics.stageWidth}px`,
                           height: `${pageRenderMetrics.stageHeight}px`
                         }}
                       >
-                        <span>Page {page.position}</span>
+                        {pagePreviewUrl ? (
+                          <img
+                            alt=""
+                            className="page-preview-image"
+                            decoding="async"
+                            loading="lazy"
+                            src={pagePreviewUrl}
+                          />
+                        ) : (
+                          <div className="page-fallback page-skeleton">
+                            <span>Page {page.position}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
