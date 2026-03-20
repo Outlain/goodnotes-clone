@@ -381,9 +381,23 @@ export function EditorPage() {
     });
   }
 
+  function flushPendingVisiblePages(): void {
+    const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([pageId]) => pageId);
+
+    setVisiblePageIds((current) => {
+      if (current.length === sortedVisibleIds.length && current.every((pageId, index) => pageId === sortedVisibleIds[index])) {
+        return current;
+      }
+      return sortedVisibleIds;
+    });
+  }
+
   function setTouchScrollActive(nextValue: boolean): void {
     touchScrollActiveRef.current = nextValue;
     if (!nextValue) {
+      flushPendingVisiblePages();
       flushPendingActivePage();
     }
   }
@@ -1347,6 +1361,21 @@ export function EditorPage() {
     let frameId = 0;
     const flushVisiblePages = () => {
       frameId = 0;
+
+      // Skip ALL state updates while the user is actively scrolling.
+      // This prevents the expensive hydration/prefetch cascade from
+      // firing mid-scroll which causes the 2-second freeze.
+      if (touchScrollActiveRef.current) {
+        const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
+          .sort((left, right) => right[1] - left[1])
+          .map(([pageId]) => pageId);
+        const mostVisiblePageId = sortedVisibleIds[0];
+        if (mostVisiblePageId) {
+          pendingActivePageIdRef.current = mostVisiblePageId;
+        }
+        return;
+      }
+
       const sortedVisibleIds = [...visibleRatiosRef.current.entries()]
         .sort((left, right) => right[1] - left[1])
         .map(([pageId]) => pageId);
@@ -1360,17 +1389,10 @@ export function EditorPage() {
 
       const mostVisiblePageId = sortedVisibleIds[0];
       if (mostVisiblePageId && mostVisiblePageId !== activePageIdRef.current) {
-        if (touchScrollActiveRef.current) {
-          pendingActivePageIdRef.current = mostVisiblePageId;
-        } else {
-          activePageIdRef.current = mostVisiblePageId;
-          // Use startTransition so the active-page change (which recalculates
-          // renderedPageIdSet) doesn't block the scroll thread and cause
-          // layout-shift-induced "snapping" on large documents.
-          startTransition(() => {
-            setActivePageId(mostVisiblePageId);
-          });
-        }
+        activePageIdRef.current = mostVisiblePageId;
+        startTransition(() => {
+          setActivePageId(mostVisiblePageId);
+        });
       }
     };
 
